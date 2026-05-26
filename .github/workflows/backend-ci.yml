@@ -23,7 +23,6 @@ on:
         default: 'us-east-2'
         type: string
 
-# Prevent multiple simultaneous deployments to the same environment from conflicting
 concurrency:
   group: backend-deploy-${{ github.event.inputs.stage || (github.ref_name == 'main' && 'prod' || 'dev') }}
   cancel-in-progress: true
@@ -36,8 +35,7 @@ jobs:
   deploy:
     name: Deploy Backend
     runs-on: [self-hosted, linux, x64, rhel]
-    
-    # Map branch or input to active GitHub Environment
+  
     environment: ${{ github.event.inputs.stage || (github.ref_name == 'main' && 'production' || 'development') }}
 
     steps:
@@ -47,20 +45,13 @@ jobs:
       - name: Set Environment Stage and Deployment Variables
         id: env-setup
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            STAGE="${{ inputs.stage }}"
-            REGION="${{ inputs.region || vars.AWS_REGION }}"
-          elif [ "${{ github.ref_name }}" = "main" ]; then
-            STAGE="prod"
-            REGION="${{ vars.AWS_REGION }}"
-          else
-            STAGE="dev"
-            REGION="${{ vars.AWS_REGION }}"
-          fi
+          # Load parameters directly from GitHub Environment-level variables, supporting manual inputs as overrides
+          STAGE="${{ github.event.inputs.stage || vars.STAGE || 'dev' }}"
+          REGION="${{ github.event.inputs.region || vars.AWS_REGION || 'us-east-2' }}"
           
           echo "stage=$STAGE" >> $GITHUB_OUTPUT
           echo "region=$REGION" >> $GITHUB_OUTPUT
-          echo "Deploying to stage: $STAGE in region: $REGION"
+          echo "Deploying using GitHub Environment stage: $STAGE, region: $REGION"
 
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -110,7 +101,8 @@ jobs:
       - name: Extract Deployment Name (DEP_NAME)
         id: get-dep-name
         run: |
-          DEP_NAME=$(python3 -c "import yaml; print(yaml.safe_load(open('var/${{ steps.env-setup.outputs.stage }}-var.yml')).get('DEP_NAME', 'sdd'))")
+          # Prioritize the GitHub Environment variable vars.DEP_NAME, fall back to parsing the downloaded configuration file
+          DEP_NAME=$(python3 -c "import yaml; print('${{ vars.DEP_NAME }}' or yaml.safe_load(open('var/${{ steps.env-setup.outputs.stage }}-var.yml')).get('DEP_NAME', 'sdd'))")
           echo "dep-name=$DEP_NAME" >> $GITHUB_OUTPUT
           echo "Extracted deployment name: $DEP_NAME"
 
