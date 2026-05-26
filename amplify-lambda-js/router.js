@@ -305,13 +305,19 @@ const routeRequestCore = async (params, returnResponse, responseStream) => {
                 }
             }
 
-            const models = user_model_data.models;
-            if (!models) {
+            if (!user_model_data?.models) {
+                logger.error("User models unavailable; aborting request before model validation", {
+                    userId: params.user,
+                    hasUserModelData: !!user_model_data,
+                    userModelDataType: user_model_data === null ? 'null' : Array.isArray(user_model_data) ? 'array' : typeof user_model_data
+                });
                 return returnResponse(responseStream, {
-                    statusCode: 400,
-                    body: { error: "No user models." }
+                    statusCode: 503,
+                    body: { error: "Unable to load user models." }
                 });
             }
+
+            const models = user_model_data.models;
 
             logger.debug("Processing request");
 
@@ -537,7 +543,9 @@ const routeRequestCore = async (params, returnResponse, responseStream) => {
 
                 // ❌ DON'T RE-THROW - Handle error gracefully to prevent Lambda hang
                 // Return error response instead of throwing
-                return returnResponse(responseStream, {
+                // ✅ MUST await here: without await, the finally block runs ensureStreamClosed()
+                // synchronously before this pipeline completes, causing ERR_STREAM_WRITE_AFTER_END
+                return await returnResponse(responseStream, {
                     statusCode: 500,
                     body: { error: error.message || "Internal server error" }
                 });
@@ -587,7 +595,7 @@ const routeRequestCore = async (params, returnResponse, responseStream) => {
             logger.error("[LAMBDA_TERMINATION] 💀 Forcing Lambda termination due to critical failure");
 
             // Strategy 1: Force stream closure using returnResponse (handles both local and AWS)
-            returnResponse(responseStream, { statusCode: 500, body: { error: "Lambda terminated" } });
+            await returnResponse(responseStream, { statusCode: 500, body: { error: "Lambda terminated" } });
 
             // Strategy 2: Defensive cleanup as backup
             ensureStreamClosed(responseStream, "lambda-termination");
@@ -618,7 +626,7 @@ const routeRequestCore = async (params, returnResponse, responseStream) => {
             });
         }
 
-        returnResponse(responseStream, {
+        await returnResponse(responseStream, {
             statusCode: 400,
             body: { error: e.message }
         });

@@ -24,6 +24,9 @@ config({ path: join(__dirname, '../../.env.local') });
 const userPoolId = process.env.COGNITO_USER_POOL_ID;
 const clientId = process.env.COGNITO_CLIENT_ID;
 const idpPrefix = (process.env.IDP_PREFIX || '').toLowerCase();
+// Claim in the JWT to use as the canonical user identifier (e.g. 'email', 'immutable_id').
+// Requires the claim to be present in the Cognito access token (via Pre-Token Generation trigger).
+const userIdentifierClaim = (process.env.USER_IDENTIFIER_CLAIM || '').toLowerCase();
 
 // Ensure the environment variables are defined
 if (!userPoolId || !clientId) {
@@ -109,11 +112,20 @@ export const extractParams = async (event) => {
 
         let current_user = null;
      
-        // First try sub - check if it exists in cognito table
-        if (payload.immutable_id ) {
+        // First: check configurable claim (e.g. email injected via Pre-Token Generation trigger)
+        if (userIdentifierClaim && payload[userIdentifierClaim]) {
+            current_user = payload[userIdentifierClaim];
+            logger.info(`Using '${userIdentifierClaim}' claim for user: ${current_user}`);
+        }
+
+        // Second: legacy immutable_id custom claim
+        if (!current_user && payload.immutable_id) {
             current_user = payload.immutable_id;
             logger.info(`Using immutable_id for user: ${current_user}`);
-        } else if (payload.sub) {
+        }
+
+        // Third: sub from Cognito users table
+        if (!current_user && payload.sub) {
             const subExists = await checkUserInCognitoTable(payload.sub);
             if (subExists) {
                 current_user = payload.sub;
@@ -121,7 +133,7 @@ export const extractParams = async (event) => {
             }
         }
         
-        // If sub not found, fallback to old IDP prefix username logic
+        // Fallback: strip IDP prefix from Cognito federated username
         if (!current_user) {
             logger.debug(`Extracting username from: ${user}`);
             current_user = extractCleanUsername();

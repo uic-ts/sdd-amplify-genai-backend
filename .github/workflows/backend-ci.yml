@@ -1,0 +1,131 @@
+name: Backend Serverless Compose Deploy
+
+on:
+  push:
+    branches: [dev, main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Deployment Stage'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      region:
+        description: 'AWS Region Override (Optional)'
+        required: false
+        default: 'us-east-2'
+        type: string
+
+# Prevent multiple simultaneous deployments to the same environment from conflicting
+concurrency:
+  group: backend-deploy-${{ github.event.inputs.stage || (github.ref_name == 'main' && 'prod' || 'dev') }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy Backend
+    runs-on: [self-hosted, linux, x64, rhel]
+    
+    # Map branch or input to active GitHub Environment
+    environment: ${{ github.event.inputs.stage || (github.ref_name == 'main' && 'production' || 'development') }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set Environment Stage and Deployment Variables
+        id: env-setup
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            STAGE="${{ inputs.stage }}"
+            REGION="${{ inputs.region || vars.AWS_REGION }}"
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            STAGE="prod"
+            REGION="${{ vars.AWS_REGION }}"
+          else
+            STAGE="dev"
+            REGION="${{ vars.AWS_REGION }}"
+          fi
+          
+          echo "stage=$STAGE" >> $GITHUB_OUTPUT
+          echo "region=$REGION" >> $GITHUB_OUTPUT
+          echo "Deploying to stage: $STAGE in region: $REGION"
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_IAM_ROLE_ARN }}
+          aws-region: ${{ steps.env-setup.outputs.region }}
+          audience: sts.amazonaws.com
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Cache Serverless Python Requirements
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/.serverless_cache
+            ~/.cache/pip
+          key: ${{ runner.os }}-serverless-requirements-${{ hashFiles('**/requirements.txt', 'scripts/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-serverless-requirements-
+
+      - name: Install Python Requirements
+        run: |
+          pip install -r scripts/requirements.txt
+
+      - name: Install NPM Dependencies
+        run: |
+          npm ci
+
+      - name: Download stage var file from AWS Secrets Manager
+        run: |
+          mkdir -p var
+          aws secretsmanager get-secret-value \
+            --secret-id "amplify/backend/${{ steps.env-setup.outputs.stage }}/var" \
+            --query SecretString \
+            --output text > var/${{ steps.env-setup.outputs.stage }}-var.yml
+
+      - name: Extract Deployment Name (DEP_NAME)
+        id: get-dep-name
+        run: |
+          DEP_NAME=$(python3 -c "import yaml; print(yaml.safe_load(open('var/${{ steps.env-setup.outputs.stage }}-var.yml')).get('DEP_NAME', 'sdd'))")
+          echo "dep-name=$DEP_NAME" >> $GITHUB_OUTPUT
+          echo "Extracted deployment name: $DEP_NAME"
+
+      # Mandatory step to sync config to AWS Systems Manager Parameter Store
+      - name: Sync AWS Parameter Store
+        run: |
+          python3 scripts/populate_parameter_store.py \
+            --stage ${{ steps.env-setup.outputs.stage }} \
+            --dep-name ${{ steps.get-dep-name.outputs.dep-name }} \
+            --region ${{ steps.env-setup.outputs.region }}
+
+      - name: Validate Serverless Configuration (Dry-Run)
+        run: |
+          npx serverless print --stage ${{ steps.env-setup.outputs.stage }} > /dev/null
+
+      - name: Deploy Serverless Compose Services
+        run: |
+          npx serverless deploy --stage ${{ steps.env-setup.outputs.stage }}

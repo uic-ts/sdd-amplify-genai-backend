@@ -715,7 +715,7 @@ def handle_update_config(config_type, update_data, token, invalid_users_set):
         case (AdminConfigTypes.APP_VARS
             | AdminConfigTypes.APP_SECRETS
             | AdminConfigTypes.OPENAI_ENDPOINTS):
-            region_name = os.environ.get("AWS_REGION", "us-east-1")
+            region_name = os.environ.get("AWS_REGION", "us-east-2")
             if config_type in secret_name_map:
                 secret_name = secret_name_map[config_type]
                 return update_secret(secret_name, region_name, update_data)
@@ -1081,7 +1081,7 @@ def get_configs(event, context, current_user, name, data):
     else:
         logger.info("Loading remaining configs only")
 
-        region_name = os.environ.get("AWS_REGION", "us-east-1")
+        region_name = os.environ.get("AWS_REGION", "us-east-2")
         # secrets manager info
         for config_type, secret_name in secret_name_map.items():
             try:
@@ -1765,18 +1765,24 @@ def verify_valid_admin(event, context, current_user, name, data):
 
 def authorized_admin(current_user, forFeatureFlags=False):
     try:
+        env_admins = {
+            admin.strip()
+            for admin in os.environ.get("ADMINS", "").split(",")
+            if admin.strip()
+        }
+
         # Get the 'admins' configuration item
         response = admin_table.get_item(
             Key={"config_id": AdminConfigTypes.ADMINS.value}
         )
         if "Item" in response:
-            admins_list = response["Item"].get("data", [])
+            admins_list = set(response["Item"].get("data", [])) | env_admins
             if current_user in admins_list:
                 logger.info("%s is authorized to make changes.", current_user)
                 return True
         else:
             logger.warning("No admins list in the admins table...")
-            init_admins = initialize_config(AdminConfigTypes.ADMINS)
+            init_admins = set(initialize_config(AdminConfigTypes.ADMINS)) | env_admins
             return current_user in init_admins
 
     except Exception as e:

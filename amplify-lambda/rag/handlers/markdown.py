@@ -108,10 +108,11 @@ class MarkDownHandler(TextExtractionHandler):
             return format_visual_chunk_data(visual_data, self.num_tokens_from_string)
         else:
             # Text files, etc.
-            content = visual_data["transcription"]
+            content = visual_data.get("transcription")
+            content_str = f"{content}" if content else "Visual content"
             return {
-                "content": content,
-                "tokens": self.num_tokens_from_string(content),
+                "content": content_str,
+                "tokens": self.num_tokens_from_string(content_str),
                 "location": visual_data.get("location"),
                 "canSplit": True,
             }

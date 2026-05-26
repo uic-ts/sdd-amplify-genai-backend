@@ -697,7 +697,7 @@ def migrate_shares_bucket_for_user(old_id: str, new_id: str, dry_run: bool = Fal
         log(f"Unexpected error during shares migration: {str(e)}")
         return False
 
-def migrate_workflow_templates_bucket_for_user(old_id: str, new_id: str, dry_run: bool = False, workflow_table_row: dict = None, region: str = "us-east-1") -> tuple:
+def migrate_workflow_templates_bucket_for_user(old_id: str, new_id: str, dry_run: bool = False, workflow_table_row: dict = None, region: str = "us-east-2") -> tuple:
     """
     Migrate workflow template from S3 to USER_STORAGE_TABLE and remove s3_key from record.
     
@@ -873,7 +873,7 @@ def migrate_workflow_templates_bucket_for_user(old_id: str, new_id: str, dry_run
         return (False, None)
 
 
-def cleanup_orphaned_workflow_templates_for_user(old_id: str, new_id: str, dry_run: bool = False, region: str = "us-east-1") -> bool:
+def cleanup_orphaned_workflow_templates_for_user(old_id: str, new_id: str, dry_run: bool = False, region: str = "us-east-2") -> bool:
     """
     Clean up orphaned workflow templates - S3 files that exist but have no metadata entries.
     This handles cases where workflow files exist in S3 but were never properly registered
@@ -1049,7 +1049,7 @@ def cleanup_orphaned_workflow_templates_for_user(old_id: str, new_id: str, dry_r
 
 
 
-def migrate_scheduled_tasks_logs_bucket_for_user(old_id: str, new_id: str, dry_run: bool = False, scheduled_tasks_table_row: dict = None, region: str = "us-east-1") -> tuple:
+def migrate_scheduled_tasks_logs_bucket_for_user(old_id: str, new_id: str, dry_run: bool = False, scheduled_tasks_table_row: dict = None, region: str = "us-east-2") -> tuple:
     """
     Comprehensive scheduled task logs migration with split state handling:
     
@@ -1254,7 +1254,7 @@ def migrate_scheduled_tasks_logs_bucket_for_user(old_id: str, new_id: str, dry_r
         return (False, None)
 
 
-def cleanup_orphaned_scheduled_task_logs(old_id: str, dry_run: bool = False, region: str = "us-east-1") -> bool:
+def cleanup_orphaned_scheduled_task_logs(old_id: str, dry_run: bool = False, region: str = "us-east-2") -> bool:
     """
     Clean up orphaned scheduled task logs that exist in S3 but have no corresponding SCHEDULED_TASKS_TABLE entries.
     
@@ -1393,7 +1393,7 @@ def cleanup_orphaned_scheduled_task_logs(old_id: str, dry_run: bool = False, reg
         return False
 
 
-def _get_artifacts_data(old_id: str, artifacts_table_row: dict = None, region: str = "us-east-1") -> tuple:
+def _get_artifacts_data(old_id: str, artifacts_table_row: dict = None, region: str = "us-east-2") -> tuple:
     """Get artifacts data from provided row or fetch from table."""
     if artifacts_table_row:
         return artifacts_table_row, artifacts_table_row.get("artifacts", [])
@@ -1478,7 +1478,7 @@ def _process_single_artifact(artifact_metadata: dict, old_id: str, new_id: str, 
         return artifact_metadata, f"Error: {e}"
 
 
-def migrate_artifacts_bucket_for_user(old_id: str, new_id: str, dry_run: bool = False, artifacts_table_row: dict = None, region: str = "us-east-1") -> tuple:
+def migrate_artifacts_bucket_for_user(old_id: str, new_id: str, dry_run: bool = False, artifacts_table_row: dict = None, region: str = "us-east-2") -> tuple:
     """
     Migrate artifacts bucket data from S3 to USER_STORAGE_TABLE and update key format.
     ENHANCED: Handles partial migrations where some artifacts may already be migrated.
@@ -1639,7 +1639,7 @@ def migrate_artifacts_bucket_for_user(old_id: str, new_id: str, dry_run: bool = 
         return (False, None)
 
 
-def migrate_single_task_logs(task_id: str, task_user: str, logs_array: list, dry_run: bool = False, region: str = "us-east-1") -> bool:
+def migrate_single_task_logs(task_id: str, task_user: str, logs_array: list, dry_run: bool = False, region: str = "us-east-2") -> bool:
     """
     Migrate all S3 log files for a single scheduled task into consolidated USER_STORAGE_TABLE entry.
     
@@ -1761,7 +1761,7 @@ def migrate_single_task_logs(task_id: str, task_user: str, logs_array: list, dry
         return False
 
 
-def migrate_user_settings_for_user(old_id: str, new_id: str, dry_run: bool = False, shares_table_row: dict = None, region: str = "us-east-1") -> bool:
+def migrate_user_settings_for_user(old_id: str, new_id: str, dry_run: bool = False, shares_table_row: dict = None, region: str = "us-east-2") -> bool:
     """
     Migrate user settings from SHARES_DYNAMODB_TABLE settings column to USER_STORAGE_TABLE.
     Returns True if migration was successful or not needed, False if failed.

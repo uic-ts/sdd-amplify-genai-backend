@@ -16,7 +16,7 @@ const BLANK_MSG = "Intentionally Left Blank, please ignore";
 let cachedBedrockClient = null;
 const getBedrockClient = () => {
     if (!cachedBedrockClient) {
-        const region = process.env.DEP_REGION ?? 'us-east-1';
+        const region = process.env.DEP_REGION ?? 'us-east-2';
         cachedBedrockClient = new BedrockRuntimeClient({ region });
         // Created and cached Bedrock client
     }

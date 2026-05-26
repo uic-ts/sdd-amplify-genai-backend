@@ -255,8 +255,8 @@ def parse_args():
     )
     parser.add_argument(
         "--region",
-        default="us-east-1",
-        help="AWS region for DynamoDB and S3 operations (default: us-east-1)"
+        default="us-east-2",
+        help="AWS region for DynamoDB and S3 operations (default: us-east-2)"
     )
     return parser.parse_args()
 

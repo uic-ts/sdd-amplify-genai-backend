@@ -105,9 +105,11 @@ def format_visual_chunk_data(visual_data, num_tokens_from_string_func):
     useful_alt_text = alt_text if is_useful_alt_text(alt_text) else ""
 
     alt_text_formatted = f"[{useful_alt_text}]\n" if useful_alt_text else ""
-    content = f"""{visual_data['type']}: {visual_data['title']}
-{visual_data['transcription']}
-{alt_text_formatted}"""
+    transcription = visual_data.get("transcription")
+    transcription_formatted = f"{transcription}\n" if transcription else ""
+
+    content = f"""{visual_data.get('type', 'Visual')}: {visual_data.get('title', 'Untitled')}
+{transcription_formatted}{alt_text_formatted}""".strip()
 
     return {
         "content": content,

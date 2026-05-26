@@ -1,0 +1,76 @@
+name: Sync Upstream Changes (PR Creator)
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Run daily at midnight
+  workflow_dispatch:      # Allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    name: Sync Upstream to PR
+    runs-on: [self-hosted, linux, x64, rhel]
+    steps:
+      - name: Checkout Fork
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add Upstream Remote
+        run: |
+          git remote add upstream https://github.com/gaiin-platform/amplify-genai-backend.git
+          git fetch upstream
+
+      - name: Check for New Upstream Commits
+        id: check-changes
+        run: |
+          # Count commits in upstream/main that are not in dev
+          BEHIND_COUNT=$(git rev-list --count HEAD..upstream/main)
+          echo "Behind upstream/main by $BEHIND_COUNT commits."
+          if [ "$BEHIND_COUNT" -gt 0 ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout Sync Branch
+        if: steps.check-changes.outputs.has_changes == 'true'
+        run: |
+          git checkout -b integration/sync-upstream-changes
+
+      - name: Attempt Merge
+        if: steps.check-changes.outputs.has_changes == 'true'
+        id: merge
+        run: |
+          if git merge upstream/main --no-edit; then
+            echo "conflicts=false" >> $GITHUB_OUTPUT
+          else
+            echo "conflicts=true" >> $GITHUB_OUTPUT
+            # Abort so git state is clean, create-pull-request handles the sync
+            git merge --abort
+            # We will pull in conflicts using a standard checkout of upstream files if they choose to resolve it
+          fi
+
+      - name: Create Pull Request
+        if: steps.check-changes.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: integration/sync-upstream-changes
+          base: dev
+          title: "Upstream Sync: New Changes from gaain-platform (Backend)"
+          body: |
+            New changes have been detected in the upstream `gaain-platform/amplify-genai-backend` repository.
+            
+            This automated Pull Request has been created to bring your `dev` branch up to date.
+            
+            ${{ steps.merge.outputs.conflicts == 'true' && '**Note:** Merge conflicts were detected! You will need to pull this branch down locally to resolve conflicts before merging.' || '**Note:** No conflicts were detected. You can review and merge this PR safely.' }}

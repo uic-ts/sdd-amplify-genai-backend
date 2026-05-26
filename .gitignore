@@ -26,7 +26,8 @@ internal/
 *internal.yml
 # Environment
 .*venv
-.env* 
+.env*
+frontend.env
 .*venv*
 .requirements.zip*
 requirements.in
@@ -35,6 +36,7 @@ claude.md
 
 # Serverless
 .serverless
+.serverless_cache/
 /package
 
 # Node.js

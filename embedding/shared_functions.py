@@ -496,7 +496,7 @@ def get_original_creator(textLocationKey):
     session = boto3.Session()
 
     # Initialize DynamoDB resource
-    dynamodb = session.resource("dynamodb", region_name="us-east-1")
+    dynamodb = session.resource("dynamodb", region_name="us-east-2")
 
     # Select your DynamoDB table
     table = dynamodb.Table(hash_files_dynamo_table)

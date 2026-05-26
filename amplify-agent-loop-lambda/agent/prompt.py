@@ -295,7 +295,7 @@ def litellm_model_str(model):
             os.environ["AZURE_API_VERSION"] = version
             provider_prefix = "azure"
     elif is_bedrock_model(model):
-        region = os.environ.get("AWS_REGION", "us-east-1")
+        region = os.environ.get("AWS_REGION", "us-east-2")
 
         # Create a boto3 client for your bedrock interactions if needed
         bedrock_client = boto3.client("bedrock-runtime", region_name=region)

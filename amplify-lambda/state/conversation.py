@@ -11,6 +11,7 @@ from pycommon.dal.providers.aws.resource_perms import (
     DynamoDBOperation, S3Operation
 )
 setup_validated(rules, get_permission_checker)
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 import boto3
 import boto3.dynamodb.conditions
@@ -22,6 +23,15 @@ from pycommon.lzw import lzw_compress, lzw_uncompress
 
 from pycommon.logger import getLogger
 logger = getLogger("conversations")
+
+
+def get_s3_client():
+    region_name = os.environ.get("AWS_REGION") or os.environ.get("DEP_REGION") or "us-east-2"
+    return boto3.client(
+        "s3",
+        region_name=region_name,
+        config=Config(s3={"addressing_style": "virtual"}),
+    )
 
 def update_conversation_cache(user_id, conversation_data, folder=None):
     """Update conversation metadata cache when conversation changes"""
@@ -520,7 +530,7 @@ def get_multiple_conversations(event, context, current_user, name, data):
 def get_presigned_urls(current_user, conversations, chunk_size=400):
     # Use consolidation bucket for temporary presigned URL files
     consolidation_bucket = os.environ["S3_CONSOLIDATION_BUCKET_NAME"]
-    s3 = boto3.client("s3")
+    s3 = get_s3_client()
 
     total_chunks = math.ceil(len(conversations) / chunk_size)
     presigned_urls = []

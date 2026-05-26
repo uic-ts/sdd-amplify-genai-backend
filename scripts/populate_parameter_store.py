@@ -45,7 +45,7 @@ CloudFormationLoader.add_constructor('!Join', construct_join)
 CloudFormationLoader.add_constructor('!ImportValue', construct_import_value)
 
 class ParameterStorePopulator:
-    def __init__(self, stage: str, dep_name: str, region: str = 'us-east-1', dry_run: bool = False):
+    def __init__(self, stage: str, dep_name: str, region: str = 'us-east-2', dry_run: bool = False):
         self.stage = stage
         self.dep_name = dep_name
         self.region = region
@@ -214,7 +214,7 @@ class ParameterStorePopulator:
                 
                 # Define the shared variables to migrate
                 shared_var_names = [
-                    'ADMINS', 'API_GATEWAY_MAX_TIMEOUT_MS', 'CHANGE_SET_BOOLEAN', 'CUSTOM_API_DOMAIN', 'DEP_REGION', 'IDP_PREFIX',
+                    'ADMINS', 'API_GATEWAY_MAX_TIMEOUT_MS', 'CHANGE_SET_BOOLEAN', 'CUSTOM_API_DOMAIN', 'DEP_REGION', 'IDP_PREFIX', 'USER_IDENTIFIER_CLAIM',
                     'LOG_LEVEL', 'OAUTH_AUDIENCE', 'OAUTH_ISSUER_BASE_URL', 'PANDOC_LAMBDA_LAYER_ARN',
                     'ASSISTANTS_OPENAI_PROVIDER', 'LLM_ENDPOINTS_SECRETS_NAME_ARN',
                     'BEDROCK_GUARDRAIL_ID', 'BEDROCK_GUARDRAIL_VERSION',
@@ -421,7 +421,7 @@ def main():
     parser = argparse.ArgumentParser(description='Populate AWS Parameter Store with serverless.yml variables')
     parser.add_argument('--stage', required=True, help='Deployment stage (dev, staging, prod)')
     parser.add_argument('--dep-name', required=True, help='Deployment name for DEP_NAME variable')
-    parser.add_argument('--region', default='us-east-1', help='AWS region (default: us-east-1)')
+    parser.add_argument('--region', default='us-east-2', help='AWS region (default: us-east-2)')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be done without making changes')
     
     args = parser.parse_args()

@@ -417,7 +417,7 @@ python3 scripts/id_migration.py --no-id-change --dont-backup --log migration_con
 # 4. FOR AUTOMATION/CI-CD (no interactive prompts)
 python3 scripts/id_migration.py --no-id-change --no-confirmation --log migration_consolidation.log
 
-# 5. IF NOT IN us-east-1 region
+# 5. IF NOT IN us-east-2 region
 python3 scripts/id_migration.py --no-id-change --region us-west-2 --log migration_consolidation.log
 ```
 
@@ -455,7 +455,7 @@ python3 scripts/id_migration.py --use-sub --dont-backup --log migration_full.log
 # 4. FOR AUTOMATION/CI-CD (no interactive prompts)
 python3 scripts/id_migration.py --use-sub --no-confirmation --log migration_full.log
 
-# 5. IF NOT IN us-east-1 region
+# 5. IF NOT IN us-east-2 region
 python3 scripts/id_migration.py --use-sub --region us-west-2 --log migration_full.log
 ```
 
@@ -473,7 +473,7 @@ python3 scripts/id_migration.py --dont-backup --csv-file migration_users.csv --l
 # 4. FOR AUTOMATION/CI-CD (no interactive prompts)
 python3 scripts/id_migration.py --no-confirmation --csv-file migration_users.csv --log migration_full.log
 
-# 5. IF NOT IN us-east-1 region
+# 5. IF NOT IN us-east-2 region
 python3 scripts/id_migration.py --region us-west-2 --csv-file migration_users.csv --log migration_full.log
 ```
 
@@ -628,7 +628,7 @@ The migration eliminates the `amplify-lambda-basic-ops` service and transitions 
    export AWS_ACCESS_KEY_ID=your_access_key_here
    export AWS_SECRET_ACCESS_KEY=your_secret_key_here
    export AWS_SESSION_TOKEN=your_session_token_here  # Only if using temporary credentials
-   export AWS_DEFAULT_REGION=us-east-1
+   export AWS_DEFAULT_REGION=us-east-2
    ```
 
    **Option B: AWS Credentials File (More Persistent)**
@@ -664,7 +664,7 @@ When you run the populate script, you should see output like this:
 
 ```
 Populating Parameter Store for stage: dev, dep_name: v6
-Region: us-east-1
+Region: us-east-2
 ================================================================================
 Found serverless.yml in: amplify-assistants
 Found serverless.yml in: amplify-lambda
@@ -791,7 +791,7 @@ environment:
 - `--no-id-change`: Generate migration_users.csv with same old_id and new_id for S3 consolidation only (no username changes)
 - `--dont-backup`: Skip both backup creation and verification (for users who already have backups)
 - `--no-confirmation`: Skip all interactive prompts (useful for automation/CI/CD)
-- `--region`: AWS region for DynamoDB and S3 operations (default: us-east-1)
+- `--region`: AWS region for DynamoDB and S3 operations (default: us-east-2)
 - `--log`: Log output to the specified file (auto-generated if not provided)
 
 **⚠️ All table and bucket names come exclusively from `config.py` - no command-line overrides allowed for consistency.**
