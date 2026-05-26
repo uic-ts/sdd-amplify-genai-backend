@@ -100,7 +100,7 @@ def configure_litellm(model: Dict[str, Any], secrets: Dict[str, Any]) -> tuple:
             
     elif is_bedrock_model(model_id):
         # Bedrock configuration - use environment variables for auth (not deprecated client param)
-        region = os.environ.get("AWS_REGION", "us-east-1")
+        region = os.environ.get("AWS_REGION", "us-east-2")
         config = {"aws_region_name": region}
         
         # Avoid double prefixing if model_id already has bedrock prefix

@@ -17,7 +17,7 @@ const __dirname = dirname(__filename);
 config({ path: join(__dirname, '../../.env.local') });
 
 
-const secretsManagerClient = new SecretsManagerClient({ region: 'us-east-1' });
+const secretsManagerClient = new SecretsManagerClient({ region: 'us-east-2' });
 
 export const getSecret = async (secretName) => {
 

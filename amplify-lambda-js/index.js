@@ -216,13 +216,13 @@ export const handler = awslambda.streamifyResponse(protectedHandler);
 export const streamHandler = awslambda.streamifyResponse(async (event, responseStream, context) => {
     logger.debug("streamHandler: API Gateway AWS_PROXY streaming mode - using HttpResponseStream.from()");
 
-    // API Gateway requires metadata + delimiter - HttpResponseStream.from() handles this automatically
+    // Lambda Function URL CORS is configured in infrastructure; avoid duplicating CORS headers here.
+    // HttpResponseStream.from() still needs response metadata for streaming.
     const httpResponseMetadata = {
         statusCode: 200,
         headers: {
             'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Access-Control-Allow-Origin': '*'
+            'Cache-Control': 'no-cache'
         }
     };
 

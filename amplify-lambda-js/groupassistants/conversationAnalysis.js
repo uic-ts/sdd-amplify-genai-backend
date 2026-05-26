@@ -12,10 +12,10 @@ import { v4 as uuidv4 } from 'uuid';
 
 const logger = getLogger("conversationAnalysis");
 
-const dynamodbClient = new DynamoDBClient({ region: "us-east-1" });
+const dynamodbClient = new DynamoDBClient({ region: "us-east-2" });
 const docClient = DynamoDBDocumentClient.from(dynamodbClient);
-const s3Client = new S3Client({ region: "us-east-1" });
-const sqsClient = new SQSClient({ region: process.env.DEP_REGION || "us-east-1" });
+const s3Client = new S3Client({ region: "us-east-2" });
+const sqsClient = new SQSClient({ region: process.env.DEP_REGION || "us-east-2" });
 
 function calculateMD5(content) {
     return createHash('md5').update(content).digest('base64');

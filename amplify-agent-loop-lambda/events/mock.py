@@ -47,7 +47,7 @@ Date: {timestamp}
             "dmarcVerdict": {"status": "PASS"},
             "action": {
                 "type": "SNS",
-                "topicArn": "arn:aws:sns:us-east-1:514391678313:vu-amplify-agent-loop-dev-email-topic",
+                "topicArn": "arn:aws:sns:us-east-2:514391678313:vu-amplify-agent-loop-dev-email-topic",
             },
         },
         "content": encoded_content,
@@ -56,14 +56,14 @@ Date: {timestamp}
     sns_message = {
         "Type": "Notification",
         "MessageId": str(uuid.uuid4()),
-        "TopicArn": "arn:aws:sns:us-east-1:514391678313:vu-amplify-agent-loop-dev-email-topic",
+        "TopicArn": "arn:aws:sns:us-east-2:514391678313:vu-amplify-agent-loop-dev-email-topic",
         "Subject": "Amazon SES Email Receipt Notification",
         "Message": json.dumps(ses_notification),
         "Timestamp": timestamp,
         "SignatureVersion": "1",
         "Signature": "dummy_signature",
-        "SigningCertURL": "https://sns.us-east-1.amazonaws.com/SimpleNotificationService-9c6465fa7f48f5cacd23014631ec1136.pem",
-        "UnsubscribeURL": "https://sns.us-east-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-east-1:514391678313:vu-amplify-agent-loop-dev-email-topic:8ca6f471-7b1f-4803-af0e-b6487ab1a04e",
+        "SigningCertURL": "https://sns.us-east-2.amazonaws.com/SimpleNotificationService-9c6465fa7f48f5cacd23014631ec1136.pem",
+        "UnsubscribeURL": "https://sns.us-east-2.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-east-2:514391678313:vu-amplify-agent-loop-dev-email-topic:8ca6f471-7b1f-4803-af0e-b6487ab1a04e",
     }
 
     body_content = json.dumps(sns_message)
@@ -88,8 +88,8 @@ Date: {timestamp}
                 "messageAttributes": {},
                 "md5OfBody": hashlib.md5(body_content.encode()).hexdigest(),
                 "eventSource": "aws:sqs",
-                "eventSourceARN": "arn:aws:sqs:us-east-1:514391678313:vu-amplify-agent-loop-dev-agent-queue",
-                "awsRegion": "us-east-1",
+                "eventSourceARN": "arn:aws:sqs:us-east-2:514391678313:vu-amplify-agent-loop-dev-agent-queue",
+                "awsRegion": "us-east-2",
             }
         ]
     }

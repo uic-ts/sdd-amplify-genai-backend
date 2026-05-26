@@ -72,7 +72,7 @@ class EnvVarTracker {
         this.stage = process.env.STAGE || "dev";
         this.serviceName = process.env.SERVICE_NAME || "unknown";
         this.trackingTable = process.env.ENV_VARS_TRACKING_TABLE;
-        this.region = process.env.AWS_REGION || "us-east-1";
+        this.region = process.env.AWS_REGION || "us-east-2";
         
         this.trackingEnabled = !!this.trackingTable;
     }
