@@ -93,8 +93,10 @@ jobs:
       - name: Download stage var file from AWS Secrets Manager
         run: |
           mkdir -p var
+          SECRET_ID="${{ vars.BACKEND_VAR_SECRET_NAME }}"
+          echo "Fetching secret: $SECRET_ID"
           aws secretsmanager get-secret-value \
-            --secret-id "amplify/backend/${{ steps.env-setup.outputs.stage }}/var" \
+            --secret-id "$SECRET_ID" \
             --query SecretString \
             --output text > var/${{ steps.env-setup.outputs.stage }}-var.yml
 
