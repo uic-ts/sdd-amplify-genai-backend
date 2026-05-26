@@ -34,7 +34,7 @@ permissions:
 jobs:
   deploy:
     name: Deploy Backend
-    runs-on: [self-hosted, linux, x64, rhel]
+    runs-on: ubuntu-latest
   
     environment: ${{ github.event.inputs.stage || (github.ref_name == 'main' && 'production' || 'development') }}
 
