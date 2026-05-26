@@ -36,7 +36,7 @@ jobs:
     name: Deploy Backend
     runs-on: ubuntu-latest
   
-    environment: ${{ github.event.inputs.stage || (github.ref_name == 'main' && 'production' || 'development') }}
+    environment: ${{ github.ref_name == 'main' && 'amplifyprod' || 'amplifydev' }}
 
     steps:
       - name: Checkout Code
@@ -59,6 +59,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_IAM_ROLE_ARN }}
           aws-region: ${{ steps.env-setup.outputs.region }}
           audience: sts.amazonaws.com
+          output-credentials: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
