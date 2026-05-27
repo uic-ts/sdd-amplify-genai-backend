@@ -4,6 +4,7 @@
 from datetime import datetime
 import uuid
 from subprocess import check_output
+import subprocess
 import tempfile
 from urllib.parse import unquote
 
@@ -307,6 +308,8 @@ def handler(event, context):
         # Consolidation bucket keys: conversion/input/{user}/{uuid}-to-{format}.md
         if not key.startswith("conversion/input/"):
             logger.error("Unexpected key format for document conversion: %s, expected conversion/input/ prefix", safe_key)
+            input_file.close()
+            os.unlink(input_file.name)
             return
 
         user_path = key[len("conversion/input/"):]
@@ -319,102 +322,137 @@ def handler(event, context):
 
         if not email or not uuid or not fmat or not extension:
             logger.error("Could not parse email, uuid, format, and extension from key: %s", safe_key)
+            input_file.close()
+            os.unlink(input_file.name)
             return
 
         output_file = tempfile.NamedTemporaryFile(suffix="." + fmat, delete=False)
+        template_file = None
 
-        mime_type = supported_mime_types.get(fmat, "text/plain")
+        try:
+            mime_type = supported_mime_types.get(fmat, "text/plain")
 
-        logger.debug("input_bucket: %s, key: %s, input_file: %s, output_file: %s, mime_type: %s", input_bucket, safe_key, input_file.name, output_file.name, mime_type)
+            logger.debug("input_bucket: %s, key: %s, input_file: %s, output_file: %s, mime_type: %s", input_bucket, safe_key, input_file.name, output_file.name, mime_type)
 
-        download_file_from_s3(input_bucket, key, input_file.name)
+            download_file_from_s3(input_bucket, key, input_file.name)
 
-        template_name = get_template_from_s3(email, uuid)
-        has_template = False
+            template_name = get_template_from_s3(email, uuid)
+            has_template = False
 
-        if template_name and template_name != "":
-            try:
-                # Try two locations in order:
-                # 1. powerPointTemplates/{template_name} in consolidation bucket (new migrated location)
-                # 2. templates/{template_name} in original conversion output bucket (backward compatibility)
-                
-                template_key = None
-                template_bucket = None
-                template_found = False
-                
-                # Location 1: New migrated location in consolidation bucket
-                new_template_key = f"powerPointTemplates/{template_name}"
+            if template_name and template_name != "":
                 try:
-                    s3.head_object(Bucket=consolidation_bucket_name, Key=new_template_key)
-                    template_key = new_template_key
-                    template_bucket = consolidation_bucket_name
-                    template_found = True
-                    logger.debug("Found template at new location: s3://%s/%s", template_bucket, template_key)
-                except Exception:
-                    # Location 2: Original bucket (backward compatibility for non-migrated templates)
-                    original_conversion_bucket = os.environ.get("S3_CONVERSION_OUTPUT_BUCKET_NAME")
-                    if original_conversion_bucket:
-                        original_template_key = f"templates/{template_name}"
-                        try:
-                            s3.head_object(Bucket=original_conversion_bucket, Key=original_template_key)
-                            template_key = original_template_key
-                            template_bucket = original_conversion_bucket
-                            template_found = True
-                            logger.debug("Found template at original location: s3://%s/%s", template_bucket, template_key)
-                        except Exception:
-                            logger.warning("Template not found at either location: s3://%s/%s or s3://%s/%s", 
-                                          consolidation_bucket_name, new_template_key, original_conversion_bucket, original_template_key)
-                    else:
-                        logger.warning("Template not found in consolidation bucket and S3_CONVERSION_OUTPUT_BUCKET_NAME not configured")
-                
-                if template_found:
-                    suffix = template_key.rsplit(".", 1)[1]
-                    logger.debug("Using template: s3://%s/%s, suffix: %s", template_bucket, template_key, suffix)
-                    template_file = tempfile.NamedTemporaryFile(
-                        suffix="." + suffix, delete=False
-                    )
-                    download_file_from_s3(
-                        template_bucket, template_key, template_file.name
-                    )
-                    has_template = True
-                else:
-                    logger.error("Template not found: %s", template_name)
+                    # Try two locations in order:
+                    # 1. powerPointTemplates/{template_name} in consolidation bucket (new migrated location)
+                    # 2. templates/{template_name} in original conversion output bucket (backward compatibility)
                     
-            except Exception as e:
-                logger.error("Error downloading template from S3: %s, template will not be used", str(e))
-                pass
+                    template_key = None
+                    template_bucket = None
+                    template_found = False
+                    
+                    # Location 1: New migrated location in consolidation bucket
+                    new_template_key = f"powerPointTemplates/{template_name}"
+                    try:
+                        s3.head_object(Bucket=consolidation_bucket_name, Key=new_template_key)
+                        template_key = new_template_key
+                        template_bucket = consolidation_bucket_name
+                        template_found = True
+                        logger.debug("Found template at new location: s3://%s/%s", template_bucket, template_key)
+                    except Exception:
+                        # Location 2: Original bucket (backward compatibility for non-migrated templates)
+                        original_conversion_bucket = os.environ.get("S3_CONVERSION_OUTPUT_BUCKET_NAME")
+                        if original_conversion_bucket:
+                            original_template_key = f"templates/{template_name}"
+                            try:
+                                s3.head_object(Bucket=original_conversion_bucket, Key=original_template_key)
+                                template_key = original_template_key
+                                template_bucket = original_conversion_bucket
+                                template_found = True
+                                logger.debug("Found template at original location: s3://%s/%s", template_bucket, template_key)
+                            except Exception:
+                                logger.warning("Template not found at either location: s3://%s/%s or s3://%s/%s", 
+                                              consolidation_bucket_name, new_template_key, original_conversion_bucket, original_template_key)
+                        else:
+                            logger.warning("Template not found in consolidation bucket and S3_CONVERSION_OUTPUT_BUCKET_NAME not configured")
+                    
+                    if template_found:
+                        suffix = template_key.rsplit(".", 1)[1]
+                        logger.debug("Using template: s3://%s/%s, suffix: %s", template_bucket, template_key, suffix)
+                        template_file = tempfile.NamedTemporaryFile(
+                            suffix="." + suffix, delete=False
+                        )
+                        download_file_from_s3(
+                            template_bucket, template_key, template_file.name
+                        )
+                        has_template = True
+                    else:
+                        logger.error("Template not found: %s", template_name)
+                        
+                except Exception as e:
+                    logger.error("Error downloading template from S3: %s, template will not be used", str(e))
+                    pass
 
-        logger.info("Converting %s %s using %s", input_bucket, safe_key, input_file.name)
+            logger.info("Converting %s %s using %s", input_bucket, safe_key, input_file.name)
 
-        args = []
-        if has_template:
-            args = [
-                "/opt/bin/pandoc",
-                "--reference-doc",
-                template_file.name,
-                input_file.name,
-                "-o",
-                output_file.name,
-            ]
-        else:
-            args = ["/opt/bin/pandoc", input_file.name, "-o", output_file.name]
+            args = []
+            if has_template:
+                args = [
+                    "/opt/bin/pandoc",
+                    "--reference-doc",
+                    template_file.name,
+                    input_file.name,
+                    "-o",
+                    output_file.name,
+                ]
+            else:
+                args = ["/opt/bin/pandoc", input_file.name, "-o", output_file.name]
 
-        check_output(args)
+            try:
+                result = subprocess.run(
+                    args,
+                    check=True,
+                    capture_output=True
+                )
+                if result.stderr:
+                    logger.warning("Pandoc stderr: %s", result.stderr.decode("utf-8", errors="replace"))
+            except subprocess.CalledProcessError as pandoc_err:
+                stderr_msg = pandoc_err.stderr.decode("utf-8", errors="replace") if pandoc_err.stderr else "(no stderr)"
+                logger.error("Pandoc failed (exit %d) with template: %s", pandoc_err.returncode, stderr_msg)
+                if has_template:
+                    logger.warning("Retrying pandoc without reference template")
+                    fallback_args = ["/opt/bin/pandoc", input_file.name, "-o", output_file.name]
+                    fallback_result = subprocess.run(
+                        fallback_args,
+                        check=True,
+                        capture_output=True
+                    )
+                    if fallback_result.stderr:
+                        logger.warning("Pandoc fallback stderr: %s", fallback_result.stderr.decode("utf-8", errors="replace"))
+                    logger.info("Pandoc fallback (no template) succeeded")
+                else:
+                    raise
 
-        logger.info("Converted %s %s to %s", input_bucket, safe_key, output_file.name)
+            logger.info("Converted %s %s to %s", input_bucket, safe_key, output_file.name)
 
-        output_key = f"conversion/output/{email}/{uuid}.{fmat}"
-        safe_output_key = sanitize_surrogates(output_key)
+            output_key = f"conversion/output/{email}/{uuid}.{fmat}"
+            safe_output_key = sanitize_surrogates(output_key)
 
-        logger.debug("Handler parsed email: '%s' from key: '%s'", safe_email, safe_key)
-        logger.debug("Handler saving file to output key: '%s'", safe_output_key)
-        logger.info("Uploading %s %s using %s", consolidation_bucket_name, safe_output_key, output_file.name)
+            logger.debug("Handler parsed email: '%s' from key: '%s'", safe_email, safe_key)
+            logger.debug("Handler saving file to output key: '%s'", safe_output_key)
+            logger.info("Uploading %s %s using %s", consolidation_bucket_name, safe_output_key, output_file.name)
 
-        upload_file_to_s3(consolidation_bucket_name, output_key, output_file.name, mime_type)
+            upload_file_to_s3(consolidation_bucket_name, output_key, output_file.name, mime_type)
 
-        logger.info("Uploaded %s %s using %s", consolidation_bucket_name, safe_output_key, output_file.name)
+            logger.info("Uploaded %s %s using %s", consolidation_bucket_name, safe_output_key, output_file.name)
 
-        input_file.close()
-        output_file.close()
+        finally:
+            # Always clean up temp files to prevent /tmp disk exhaustion on warm Lambda containers
+            for tmp in [input_file, output_file, template_file]:
+                if tmp is not None:
+                    try:
+                        tmp.close()
+                        os.unlink(tmp.name)
+                    except Exception:
+                        pass
 
     return
+

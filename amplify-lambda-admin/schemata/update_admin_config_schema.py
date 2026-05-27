@@ -212,6 +212,9 @@ update_admin_config_schema = {
                                             "inputWriteCachedTokenCost" : {
                                                 "type": "number"
                                             },
+                                            "cachedTokenCost": {
+                                                "type": "number"
+                                            },
                                             "supportsImageGeneration": {
                                                 "type": "boolean"
                                             },
@@ -228,7 +231,7 @@ update_admin_config_schema = {
                                         "required": ["id","name", "provider", "description", "isAvailable",  "isBuiltIn",
                                                      "supportsImages", "supportsReasoning", "supportsSystemPrompts", "systemPrompt",
                                                      "inputContextWindow", "outputTokenLimit", "inputTokenCost", "outputTokenCost", 
-                                                     "inputCachedTokenCost",  "inputWriteCachedTokenCost",
+                                                     "inputCachedTokenCost",  "inputWriteCachedTokenCost", "cachedTokenCost",
                                                      "supportsImageGeneration", "supportsVideo", "exclusiveGroupAvailability"],
                                         "additionalProperties": False
                                     }

@@ -23,6 +23,7 @@ update_models_schema = {
                         "outputTokenCost": {"type": "number"},
                         "inputCachedTokenCost" : {"type": "number" },
                         "inputWriteCachedTokenCost" : {"type": "number"},
+                        "cachedTokenCost": {"type": "number"},
                         "supportsImageGeneration": {"type": "boolean"},
                         "supportsVideo": {"type": "boolean"},
                         "exclusiveGroupAvailability": {
@@ -44,6 +45,7 @@ update_models_schema = {
                         "outputTokenCost",
                         "inputCachedTokenCost",
                         "inputWriteCachedTokenCost",
+                        "cachedTokenCost",
                         "supportsImageGeneration",
                         "supportsVideo",
                         "exclusiveGroupAvailability",
