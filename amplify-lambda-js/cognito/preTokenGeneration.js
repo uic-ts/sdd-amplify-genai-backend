@@ -1,9 +1,5 @@
-import { getLogger } from '../common/logging.js';
-
-const logger = getLogger("preTokenGeneration");
-
-export const handler = async (event) => {
-    logger.info("PreTokenGeneration trigger invoked with event: " + JSON.stringify(event, null, 2));
+exports.handler = async (event) => {
+    console.log("PreTokenGeneration trigger invoked with event: " + JSON.stringify(event, null, 2));
 
     // Ensure we are using Version 2 of the trigger schema (supporting Access Token customization)
     if (event.version === "2") {
@@ -23,13 +19,14 @@ export const handler = async (event) => {
             // Add legacy immutable_id claim for backward compatibility with Python backend and existing checks
             event.response.claimsAndScopeOverrideDetails.accessTokenGeneration.claimsToAddOrOverride.immutable_id = email;
 
-            logger.info(`Successfully added email and immutable_id claims to Access Token: ${email}`);
+            console.log(`Successfully added email and immutable_id claims to Access Token: ${email}`);
         } else {
-            logger.warn("No email found in user attributes.");
+            console.warn("No email found in user attributes.");
         }
     } else {
-        logger.warn(`PreTokenGeneration V1 trigger cannot modify Access Tokens. Event version is ${event.version}. Please ensure Cognito is configured to trigger this function with Version 2.`);
+        console.warn(`PreTokenGeneration V1 trigger cannot modify Access Tokens. Event version is ${event.version}. Please ensure Cognito is configured to trigger this function with Version 2.`);
     }
 
     return event;
 };
+

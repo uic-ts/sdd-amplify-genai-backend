@@ -60,6 +60,7 @@ provider:
     COGNITO_USER_POOL_ID: ${ssm:/amplify/${sls:stage}/COGNITO_USER_POOL_ID}
     DEP_REGION: ${ssm:/amplify/${sls:stage}/DEP_REGION} 
     IDP_PREFIX: ${ssm:/amplify/${sls:stage}/IDP_PREFIX}
+    USER_IDENTIFIER_CLAIM: ${ssm:/amplify/${sls:stage}/USER_IDENTIFIER_CLAIM, ''}
     LLM_ENDPOINTS_SECRETS_NAME_ARN: ${ssm:/amplify/${sls:stage}/LLM_ENDPOINTS_SECRETS_NAME_ARN}
     LLM_ENDPOINTS_SECRETS_NAME: ${ssm:/amplify/${sls:stage}/LLM_ENDPOINTS_SECRETS_NAME}
     SECRETS_ARN_NAME: ${ssm:/amplify/${sls:stage}/SECRETS_ARN_NAME}
@@ -215,6 +216,17 @@ functions:
           batchSize: 1
           maximumBatchingWindow: 5
 
+  preTokenGeneration:
+    handler: cognito/preTokenGeneration.handler
+    memorySize: 128
+    timeout: 5
+    # No http event - invoked directly by Cognito as a trigger
+    package:
+      individually: true
+      patterns:
+        - '!**'
+        - 'cognito/preTokenGeneration.js'
+
 
 resources:
   Resources:
@@ -351,6 +363,14 @@ resources:
                 - sqs:SendMessage
               Resource:
                 - "arn:aws:sqs:${aws:region}:*:${self:provider.environment.CRITICAL_ERRORS_SQS_QUEUE_NAME}"
+
+    PreTokenGenerationLambdaPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        Action: lambda:InvokeFunction
+        FunctionName: !GetAtt PreTokenGenerationLambdaFunction.Arn
+        Principal: cognito-idp.amazonaws.com
+        SourceArn: arn:aws:cognito-idp:${aws:region}:${aws:accountId}:userpool/${ssm:/amplify/${sls:stage}/COGNITO_USER_POOL_ID}
     
     RequestStateDynamoDbTable:
       Type: 'AWS::DynamoDB::Table'
