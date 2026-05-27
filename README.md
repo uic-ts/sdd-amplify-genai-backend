@@ -78,6 +78,10 @@ npm i
 node amplify-lambda-js/local/localServer.js
 ```
 
+### Local or On-Prem LLM Provider
+
+The chat backend supports a `Local` provider for OpenAI-compatible self-hosted endpoints such as Ollama, vLLM, OpenWebUI, and internal gateways. See [docs/local-llm-provider.md](./docs/local-llm-provider.md) for configuration, EC2 Ollama setup, VPC networking, and validation steps.
+
 ## Running Lambda with Serverless Offline
 
 ### Install Serverless
@@ -138,6 +142,5 @@ npm run dev
 ```
 
 3. Open [http://localhost:3000](http://localhost:3000) in your browser to view the application.
-
 
 

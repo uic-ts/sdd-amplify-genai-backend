@@ -18,6 +18,7 @@ import { recordUsage } from '../common/accounting.js';
 import { chat as openaiChat } from '../azure/openai.js';
 import { chatBedrock } from '../bedrock/bedrock.js';
 import { chat as geminiChat } from '../gemini/gemini.js';
+import { chatLocalOpenAICompatible } from '../onprem/openaiCompatible.js';
 
 // Import event transformers
 import { openAiTransform, openaiUsageTransform } from '../common/chat/events/openai.js';
@@ -74,6 +75,18 @@ const getProviderConfig = (model) => {
             needsEndpointProvider: false,
             transform: bedrockConverseTransform,
             usageTransform: bedrockTokenUsageTransform
+        }),
+        'Local': () => ({
+            chatFn: chatLocalOpenAICompatible,
+            needsEndpointProvider: false,
+            transform: openAiTransform,
+            usageTransform: openaiUsageTransform
+        }),
+        'OnPrem': () => ({
+            chatFn: chatLocalOpenAICompatible,
+            needsEndpointProvider: false,
+            transform: openAiTransform,
+            usageTransform: openaiUsageTransform
         })
     };
 
@@ -760,7 +773,7 @@ RULES:
                 }
             }
         };
-    } else if (provider === 'Azure' || provider === 'OpenAI' || provider === 'Gemini') {
+    } else if (provider === 'Azure' || provider === 'OpenAI' || provider === 'Gemini' || provider === 'Local' || provider === 'OnPrem') {
         structuredOutputOptions.response_format = {
             type: "json_schema",
             json_schema: {

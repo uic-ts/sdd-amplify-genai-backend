@@ -81,7 +81,7 @@ const getEndpointData = (parsed_data, model_name) => {
     // Randomly choose one of the endpoints
     const endpoint_info = endpoint_data[model_name].endpoints[Math.floor(Math.random() * endpoint_data[model_name].endpoints.length)];
     const { url, key } = endpoint_info;
-    return { key, url };
+    return { ...endpoint_info, key, url };
 };
 
 
