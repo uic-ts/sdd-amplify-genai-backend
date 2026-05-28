@@ -19,7 +19,7 @@ custom:
   # Base paths for Parameter Store
   ssmBasePath: /amplify/${sls:stage}/amplify-${self:custom.depName}
   pythonRequirements:
-    dockerizePip: true
+    dockerizePip: non-linux
     usePoetry: false
     usePipenv: false
     fileName: requirements.txt

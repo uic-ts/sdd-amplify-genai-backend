@@ -24,7 +24,7 @@ custom:
   ssmBasePath: /amplify/${sls:stage}/amplify-${self:custom.depName}
     
   pythonRequirements:
-    dockerizePip: true
+    dockerizePip: non-linux
 
   cf-changesets:
     requireChangeSet: ${self:custom.stageVars.CHANGE_SET_BOOLEAN}

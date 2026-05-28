@@ -117,6 +117,10 @@ jobs:
             --dep-name ${{ steps.get-dep-name.outputs.dep-name }} \
             --region ${{ steps.env-setup.outputs.region }}
 
+      - name: Fix Python Requirements Cache Permissions
+        run: |
+          sudo chown -R $(whoami) ~/.cache/serverless-python-requirements || true
+
       - name: Deploy Serverless Compose Services
         run: |
           npx serverless deploy --stage ${{ steps.env-setup.outputs.stage }}
