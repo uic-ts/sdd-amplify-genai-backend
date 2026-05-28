@@ -90,6 +90,7 @@ jobs:
       - name: Install NPM Dependencies
         run: |
           npm ci
+          cd amplify-lambda-js && npm ci && cd ..
 
       - name: Download stage var file from AWS Secrets Manager
         run: |
