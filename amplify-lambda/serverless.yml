@@ -55,6 +55,7 @@ custom:
 
   customDomain:
     domainName: ${ssm:/amplify/${sls:stage}/CUSTOM_API_DOMAIN}
+    hostedZoneName: ${self:custom.stageVars.HOSTED_ZONE_NAME, ''}
     #certificateArn: ${self:custom.stageVars.SSL_CERT_ARN}
     certificateName:
     basePath:
