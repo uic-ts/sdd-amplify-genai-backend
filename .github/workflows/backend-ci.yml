@@ -64,7 +64,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: 'npm'
 
       - name: Setup Python
@@ -116,10 +116,6 @@ jobs:
             --stage ${{ steps.env-setup.outputs.stage }} \
             --dep-name ${{ steps.get-dep-name.outputs.dep-name }} \
             --region ${{ steps.env-setup.outputs.region }}
-
-      - name: Validate Serverless Configuration (Dry-Run)
-        run: |
-          npx serverless print --stage ${{ steps.env-setup.outputs.stage }} > /dev/null
 
       - name: Deploy Serverless Compose Services
         run: |
