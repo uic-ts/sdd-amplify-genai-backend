@@ -388,7 +388,7 @@ resources:
                 - !ImportValue "${sls:stage}-EmbeddingChunksIndexDlqArn"
                 - "arn:aws:bedrock:*:*:foundation-model/*"
                 - "arn:aws:bedrock:*:*:inference-profile/*"
-                - 'arn:aws:secretsmanager:us-east-1:*:secret:${self:provider.environment.APP_ARN_NAME}*'
+                - 'arn:aws:secretsmanager:us-east-2:*:secret:${self:provider.environment.APP_ARN_NAME}*'
                 - 'arn:aws:secretsmanager:${aws:region}:*:secret:${self:provider.environment.SECRETS_ARN_NAME}*'
                 - "arn:aws:dynamodb:${aws:region}:*:table/${self:provider.environment.OPS_DYNAMODB_TABLE}"
                 - "arn:aws:dynamodb:${aws:region}:*:table/${self:provider.environment.OPS_DYNAMODB_TABLE}/index/*"

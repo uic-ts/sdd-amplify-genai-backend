@@ -271,7 +271,7 @@ resources:
               Resource:
                 - '${self:provider.environment.LLM_ENDPOINTS_SECRETS_NAME_ARN}'
                 - 'arn:aws:secretsmanager:${self:provider.region}:*:secret:${self:provider.environment.LLM_ENDPOINTS_SECRETS_NAME_ARN}'
-                - 'arn:aws:secretsmanager:us-east-1:*:secret:${self:provider.environment.APP_ARN_NAME}*'
+                - 'arn:aws:secretsmanager:us-east-2:*:secret:${self:provider.environment.APP_ARN_NAME}*'
                 - 'arn:aws:secretsmanager:${aws:region}:*:secret:${self:provider.environment.SECRETS_ARN_NAME}*'
             - Effect: Allow
               Action:

@@ -11,7 +11,7 @@ plugins:
   - serverless-offline
   - serverless-python-requirements
   - serverless-prune-plugin
-  - serverless-domain-manager
+  # - serverless-domain-manager
   - serverless-cloudformation-changesets-v3
 
 layers:
@@ -53,16 +53,16 @@ custom:
   # Base paths for Parameter Store
   ssmBasePath: /amplify/${sls:stage}/amplify-${self:custom.depName}
 
-  customDomain:
-    domainName: ${ssm:/amplify/${sls:stage}/CUSTOM_API_DOMAIN}
-    hostedZoneName: ${self:custom.stageVars.HOSTED_ZONE_NAME, ''}
-    #certificateArn: ${self:custom.stageVars.SSL_CERT_ARN}
-    certificateName:
-    basePath:
-    stage: ${self:provider.stage}
-    createRoute53Record: true
-    autoDomain: true
-    autoDomainWaitFor: 60
+  # customDomain:
+  #   domainName: ${ssm:/amplify/${sls:stage}/CUSTOM_API_DOMAIN}
+  #   hostedZoneName: ${self:custom.stageVars.HOSTED_ZONE_NAME, 'amplify-${sls:stage}.uic.edu'}
+  #   #certificateArn: ${self:custom.stageVars.SSL_CERT_ARN}
+  #   certificateName:
+  #   basePath:
+  #   stage: ${self:provider.stage}
+  #   createRoute53Record: false
+  #   autoDomain: true
+  #   autoDomainWaitFor: 60
     
 provider:
   name: aws
@@ -137,6 +137,7 @@ provider:
         - arn:aws:iam::${aws:accountId}:policy/${self:provider.environment.LAMBDA_IAM_POLICY_NAME}-sqs
         - arn:aws:iam::${aws:accountId}:policy/${self:provider.environment.LAMBDA_IAM_POLICY_NAME}-secrets
         - arn:aws:iam::${aws:accountId}:policy/${self:provider.environment.LAMBDA_IAM_POLICY_NAME}-rds
+        - arn:aws:iam::${aws:accountId}:policy/${self:provider.environment.LAMBDA_IAM_POLICY_NAME}-lambda
         - !Ref LambdaIAMPolicyAPIGateway
 
 functions:
@@ -583,6 +584,7 @@ resources:
         - LambdaIAMPolicySQS
         - LambdaIAMPolicySecrets
         - LambdaIAMPolicyRDS
+        - LambdaIAMPolicyLambda
         - LambdaIAMPolicyAPIGateway
 
   Resources:
@@ -771,7 +773,7 @@ resources:
               Action:
                 - secretsmanager:GetSecretValue
               Resource:
-                - 'arn:aws:secretsmanager:us-east-1:*:secret:${self:provider.environment.APP_ARN_NAME}*'
+                - 'arn:aws:secretsmanager:us-east-2:*:secret:${self:provider.environment.APP_ARN_NAME}*'
                 - 'arn:aws:secretsmanager:${self:provider.region}:*:secret:${sls:stage}-openai-endpoints*'
 
     # RDS Policy
@@ -789,6 +791,19 @@ resources:
                 - rds-data:BeginTransaction
                 - rds-data:CommitTransaction
                 - rds-data:RollbackTransaction
+              Resource: '*'
+
+    # Lambda Policy
+    LambdaIAMPolicyLambda:
+      Type: AWS::IAM::ManagedPolicy
+      Properties:
+        ManagedPolicyName: ${self:provider.environment.LAMBDA_IAM_POLICY_NAME}-lambda
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
               Resource: '*'
 
     # API Gateway Policy (for runtime_config_manager)

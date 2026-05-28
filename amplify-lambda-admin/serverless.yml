@@ -263,9 +263,9 @@ resources:
                 - sqs:DeleteMessage
                 - sqs:GetQueueAttributes
               Resource:
-                - 'arn:aws:secretsmanager:us-east-1:*:secret:${self:provider.environment.APP_ARN_NAME}*'
-                - 'arn:aws:secretsmanager:us-east-1:*:secret:${self:provider.environment.SECRETS_ARN_NAME}*'
-                - 'arn:aws:secretsmanager:us-east-1:*:secret:${self:provider.environment.LLM_ENDPOINTS_SECRETS_NAME}*'
+                - 'arn:aws:secretsmanager:us-east-2:*:secret:${self:provider.environment.APP_ARN_NAME}*'
+                - 'arn:aws:secretsmanager:us-east-2:*:secret:${self:provider.environment.SECRETS_ARN_NAME}*'
+                - 'arn:aws:secretsmanager:us-east-2:*:secret:${self:provider.environment.LLM_ENDPOINTS_SECRETS_NAME}*'
                 - "arn:aws:dynamodb:${aws:region}:*:table/${self:provider.environment.API_KEYS_DYNAMODB_TABLE}"
                 - "arn:aws:dynamodb:${aws:region}:*:table/${self:provider.environment.ACCOUNTS_DYNAMO_TABLE}"
                 - "arn:aws:dynamodb:${aws:region}:*:table/${self:provider.environment.API_KEYS_DYNAMODB_TABLE}/index/*"

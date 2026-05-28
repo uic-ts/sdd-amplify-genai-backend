@@ -175,7 +175,7 @@ resources:
                 - dynamodb:CreateTable
                 - dynamodb:BatchWriteItem
               Resource:
-                - "arn:aws:secretsmanager:us-east-1:*:secret:aws/ses/credentials-i82Vzw"
+                - "arn:aws:secretsmanager:us-east-2:*:secret:aws/ses/credentials-i82Vzw"
                 - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.MODEL_RATE_TABLE}"
                 - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.MODEL_RATE_TABLE}/*"
                 - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.ADDITIONAL_CHARGES_TABLE}"
