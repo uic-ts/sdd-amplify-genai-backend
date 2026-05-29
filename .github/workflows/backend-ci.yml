@@ -122,6 +122,14 @@ jobs:
         run: |
           sudo chown -R $(whoami) ~/.cache/serverless-python-requirements || true
 
+      - name: Build Markitdown Lambda Layer
+        run: |
+          cd amplify-lambda/markitdown
+          # Remove any stale python/ directory from previous runs
+          rm -rf python/
+          bash markitdown.sh
+
+
       - name: Deploy Serverless Compose Services
         run: |
           npx serverless deploy --stage ${{ steps.env-setup.outputs.stage }}
