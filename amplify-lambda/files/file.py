@@ -86,7 +86,7 @@ def get_presigned_download_url(event, context, current_user, name, data):
     if "://" in key:
         key = key.split("://")[1]
 
-    s3 = boto3.client("s3")
+    s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-2"))
     files_table_name = os.environ["FILES_DYNAMO_TABLE"]
 
     # Access the specific table
@@ -282,7 +282,7 @@ def reprocess_document_for_rag(event, context, current_user, name, data):
     This function simply flags the document for reprocessing - the embedding service
     will handle all cleanup and determine what needs to be reprocessed.
     """
-    s3 = boto3.client("s3")
+    s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-2"))
 
     # Extract values from the top-level data object BEFORE reassigning
     access_token = data["access_token"]
@@ -670,7 +670,7 @@ def get_presigned_url(event, context, current_user, name, data):
     # logger.debug("Data is %s", data)
     data = data["data"]
 
-    s3 = boto3.client("s3")
+    s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-2"))
 
     name = data["name"]
     name = re.sub(r"[_\s]+", "_", name)
@@ -2136,7 +2136,7 @@ def delete_text_file_fully(
         logger.error("Error deleting file text from embedding progress table: %s", e)
 
     # Delete file from S3
-    s3 = boto3.client("s3")
+    s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-2"))
     s3_bucket_name = os.environ["S3_RAG_INPUT_BUCKET_NAME"]
 
     try:
@@ -2202,7 +2202,7 @@ def delete_file_from_table(key):
 
 def delete_media_file(key):
     bucket_name = os.environ["S3_IMAGE_INPUT_BUCKET_NAME"]
-    s3 = boto3.client("s3")
+    s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-2"))
     try:
         logger.info("Deleting media file from S3: %s", key)
         s3.delete_object(Bucket=bucket_name, Key=key)
