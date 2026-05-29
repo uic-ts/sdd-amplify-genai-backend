@@ -119,6 +119,16 @@ def configure_litellm(model: Dict[str, Any], secrets: Dict[str, Any]) -> tuple:
             config = {"api_key": secrets["gemini_key"]}
         return f"gemini/{model_id}", config
         
+    elif model_id.startswith("lakeshore/"):
+        # Custom local model configuration hosted on EC2
+        config = {
+            "api_key": secrets.get("lakeshore_api_key", ""),
+            "api_base": "https://relay.stream.acer.uic.edu:8001/v1"
+        }
+        # Strip the provider prefix to send the target model name to the custom endpoint
+        underlying_model = model_id.replace("lakeshore/", "")
+        return f"openai/{underlying_model}", config
+        
     else:
         raise ValueError(f"Unsupported model: {model_id}")
 

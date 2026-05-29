@@ -593,6 +593,7 @@ export async function callLiteLLM(chatRequest, model, account, responseStream, d
                     const apiKeys = JSON.parse(secret);
                     secrets.openai_key = apiKeys["OPENAI_API_KEY"];
                     secrets.gemini_key = apiKeys["GEMINI_API_KEY"];
+                    secrets.lakeshore_api_key = apiKeys["LAKESHORE_API_KEY"];
                 }
             } catch (e) {
                 logger.debug("Error fetching API keys:", e);
