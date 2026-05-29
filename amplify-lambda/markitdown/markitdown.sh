@@ -3,6 +3,10 @@ set -e
 
 docker run --rm --entrypoint pip -v $(pwd):/var/task -w /var/task public.ecr.aws/lambda/python:3.11 install --no-cache-dir --upgrade -r requirements.txt -t ./python --platform manylinux2014_x86_64 --only-binary=:all:
 
+# Docker runs as root inside the container, so python/ is owned by root.
+# Fix ownership so the current user can create subdirectories (e.g. python/pycommon).
+sudo chown -R "$(id -u):$(id -g)" python/ || true
+
 
 
 # Remove audio/video processing libraries (only if they exist and are clearly not needed)
