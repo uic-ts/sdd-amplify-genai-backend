@@ -87,6 +87,12 @@ const getProviderConfig = (model) => {
             needsEndpointProvider: false,
             transform: openAiTransform,
             usageTransform: openaiUsageTransform
+        }),
+        'lakeshore': () => ({
+            chatFn: chatLocalOpenAICompatible,
+            needsEndpointProvider: false,
+            transform: openAiTransform,
+            usageTransform: openaiUsageTransform
         })
     };
 
@@ -773,7 +779,7 @@ RULES:
                 }
             }
         };
-    } else if (provider === 'Azure' || provider === 'OpenAI' || provider === 'Gemini' || provider === 'Local' || provider === 'OnPrem') {
+    } else if (provider === 'Azure' || provider === 'OpenAI' || provider === 'Gemini' || provider === 'Local' || provider === 'OnPrem' || provider === 'lakeshore') {
         structuredOutputOptions.response_format = {
             type: "json_schema",
             json_schema: {
