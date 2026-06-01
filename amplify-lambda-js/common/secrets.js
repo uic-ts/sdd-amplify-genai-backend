@@ -117,8 +117,9 @@ export const getLLMConfig = async (model_name, model_provider) => {
         return { url, key };
     }
     if (model_provider === "lakeshore") {
-        const url = "https://relay.stream.acer.uic.edu:8001/v1";
-        const key = await getSecretApiKey("LAKESHORE_API_KEY");
+        const url = "https://relay.stream.acer.uic.edu:8001/v1".trim();
+        const rawKey = await getSecretApiKey("LAKESHORE_API_KEY");
+        const key = typeof rawKey === "string" ? rawKey.trim() : rawKey;
         // Strip the "lakeshore/" prefix so the endpoint receives the underlying model name
         const model = model_name.startsWith("lakeshore/") ? model_name.replace("lakeshore/", "") : model_name;
         return { url, key, model };

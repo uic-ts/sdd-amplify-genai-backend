@@ -12,7 +12,7 @@ permissions:
 jobs:
   sync:
     name: Sync Upstream to PR
-    runs-on: [self-hosted, linux, x64, rhel]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Fork
         uses: actions/checkout@v4

@@ -45,7 +45,7 @@ const normalizeChatCompletionsUrl = (baseUrl) => {
         throw new Error("LOCAL_LLM_BASE_URL is required for Local/OnPrem LLM provider");
     }
 
-    const trimmed = baseUrl.replace(/\/+$/, "");
+    const trimmed = typeof baseUrl === "string" ? baseUrl.trim().replace(/\/+$/, "") : "";
     if (trimmed.endsWith("/chat/completions")) {
         return trimmed;
     }
@@ -66,9 +66,11 @@ const getEndpointSecretConfig = async (model) => {
 const getLocalConfig = async (model) => {
     const envBaseUrl = getEnv("LOCAL_LLM_BASE_URL");
     const secretConfig = envBaseUrl ? {} : await getEndpointSecretConfig(model);
-    const baseUrl = getConfigValue(secretConfig, "LOCAL_LLM_BASE_URL", ["baseUrl", "base_url", "url"]);
+    const rawBaseUrl = getConfigValue(secretConfig, "LOCAL_LLM_BASE_URL", ["baseUrl", "base_url", "url"]);
+    const baseUrl = typeof rawBaseUrl === "string" ? rawBaseUrl.trim() : rawBaseUrl;
     const url = normalizeChatCompletionsUrl(baseUrl);
-    const apiKey = getConfigValue(secretConfig, "LOCAL_LLM_API_KEY", ["apiKey", "api_key", "key"]);
+    const rawApiKey = getConfigValue(secretConfig, "LOCAL_LLM_API_KEY", ["apiKey", "api_key", "key"]);
+    const apiKey = typeof rawApiKey === "string" ? rawApiKey.trim() : rawApiKey;
     const timeoutMs = Number(getConfigValue(secretConfig, "LOCAL_LLM_TIMEOUT_MS", ["timeoutMs", "timeout_ms"], DEFAULT_TIMEOUT_MS)) || DEFAULT_TIMEOUT_MS;
     const providerName = getConfigValue(secretConfig, "LOCAL_LLM_PROVIDER", ["provider"], model?.provider || "Local");
     const modelId = getConfigValue(secretConfig, "LOCAL_LLM_MODEL", ["model", "modelId", "model_id"], model?.id || "local-llm");
