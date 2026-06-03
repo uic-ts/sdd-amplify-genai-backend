@@ -213,7 +213,8 @@ export const chat = async (endpointProvider, chatBody, writable) => {
         data.messages = await includeImageSources(body.imageSources, data.messages, model, writable, isNonStandardOpenAI);
     }
 
-    const headers = isOpenAiEndpoint ?
+    const useBearerAuth = isOpenAiEndpoint || url.includes('.services.ai.azure.com');
+    const headers = useBearerAuth ?
         {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer ' + config.key,
