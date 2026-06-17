@@ -281,6 +281,9 @@ update_admin_config_schema = {
                                     "^.*$": {
                                         "type": "object",
                                         "properties": {
+                                            "groupName": {
+                                                "type": "string"
+                                            },
                                             "createdBy": {
                                                 "type": "string"
                                             },
