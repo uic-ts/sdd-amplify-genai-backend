@@ -188,7 +188,7 @@ const defaultAssistant = {
             const bodyWithMedia = { ...body, imageSources: params.body?.imageSources || undefined, videoSources: params.body?.videoSources || undefined };
 
             // Check if web search or MCP is enabled
-            let webSearchEnabled = shouldEnableWebSearch(body);
+            let webSearchEnabled = await shouldEnableWebSearch(body);
             // mcpEnabled can be at top level OR in options (frontend sends it in options via vendorProps)
             const mcpEnabled = body?.mcpEnabled === true || body?.options?.mcpEnabled === true;
 

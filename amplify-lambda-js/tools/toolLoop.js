@@ -505,21 +505,42 @@ export async function executeToolLoop(params, messages, model, responseStream, o
 }
 
 /**
- * Check if web search should be enabled for this request
+ * Check if web search should be enabled for this request.
+ * Checks explicit frontend flags first; if none are set, falls back to
+ * the admin-configured DynamoDB/SSM setting.
  */
-export function shouldEnableWebSearch(body) {
-    const result = body?.enableWebSearch === true ||
-           body?.options?.enableWebSearch === true ||
-           body?.options?.options?.webSearch === true;
+export async function shouldEnableWebSearch(body) {
+    // If the frontend explicitly opts out, respect that immediately
+    if (body?.enableWebSearch === false ||
+        body?.options?.enableWebSearch === false ||
+        body?.options?.options?.webSearch === false) {
+        logger.info(`🔍 shouldEnableWebSearch: explicitly disabled by frontend`);
+        return false;
+    }
 
-    logger.info(`🔍 shouldEnableWebSearch check:`, {
-        'body.enableWebSearch': body?.enableWebSearch,
-        'body.options?.enableWebSearch': body?.options?.enableWebSearch,
-        'body.options?.options?.webSearch': body?.options?.options?.webSearch,
-        result
-    });
+    // If the frontend explicitly opts in, use that
+    const explicitEnable = body?.enableWebSearch === true ||
+        body?.options?.enableWebSearch === true ||
+        body?.options?.options?.webSearch === true;
 
-    return result;
+    if (explicitEnable) {
+        logger.info(`🔍 shouldEnableWebSearch: explicitly enabled by frontend`);
+        return true;
+    }
+
+    // No explicit flag — fall back to admin config in DynamoDB/SSM
+    logger.info(`🔍 shouldEnableWebSearch: no frontend flag set, checking admin config...`);
+    try {
+        const adminKey = await getAdminWebSearchApiKey();
+        const result = adminKey !== null;
+        logger.info(`🔍 shouldEnableWebSearch: admin config result=${result}`, {
+            provider: adminKey?.provider ?? 'none'
+        });
+        return result;
+    } catch (err) {
+        logger.warn(`🔍 shouldEnableWebSearch: error reading admin config, defaulting to false`, { error: err.message });
+        return false;
+    }
 }
 
 export default {
