@@ -17,7 +17,7 @@ from integrations.oauth_encryption import (
 from integrations.scopes import scopes
 from msal import ConfidentialClientApplication
 from pycommon.api.auth_admin import verify_user_as_admin
-from pycommon.api.secrets import store_secret_parameter
+from pycommon.api.secrets import store_secret_parameter, get_secret_parameter
 from pycommon.decorators import required_env_vars
 from pycommon.dal.providers.aws.resource_perms import (
     DynamoDBOperation, SSMOperation
@@ -1372,3 +1372,44 @@ def get_expiration_time(expires_in):
         expires_in = 3600
     
     return int((datetime.now(timezone.utc) + timedelta(seconds=expires_in)).timestamp())
+
+
+@required_env_vars({
+    "INTEGRATION_STAGE": [SSMOperation.GET_PARAMETER],
+})
+@validated("get")
+def get_box_integrations(event, context, current_user, name, data):
+    stage = os.environ.get("INTEGRATION_STAGE")
+    secret_param = f"integrations/box/{stage}"
+
+    secrets_value = None
+    try:
+        secrets_value = get_secret_parameter(secret_param, "/oauth")
+    except Exception as e:
+        logger.error("Error retrieving Box secrets: %s", str(e))
+        logger.warning("Setting Box secrets to empty values")
+
+    secrets = {"client_id": "", "client_secret": "", "tenant_id": ""}
+    if secrets_value:
+        try:
+            secrets_json = json.loads(secrets_value)
+            secrets_data = secrets_json.get("client_config", {})
+            secrets["client_id"] = secrets_data.get("client_id", "")
+            secrets["client_secret"] = secrets_data.get("client_secret", "")
+            secrets["tenant_id"] = secrets_json.get("tenant_id", "amplifygenai")
+        except Exception as e:
+            logger.error("Error parsing Box secrets JSON: %s", str(e))
+
+    box_integrations_list = [
+        {
+            "id": "box_drive",
+            "name": "Drive",
+            "description": "Access and sync your Box files and folders."
+        }
+    ]
+
+    return {
+        "success": True,
+        "data": {"integrations": box_integrations_list, "secrets": secrets},
+    }
+

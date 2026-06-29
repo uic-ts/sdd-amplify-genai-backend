@@ -108,6 +108,16 @@ functions:
           path: integrations/list_supported
           method: get
 
+  boxListIntegrations:
+    handler: integrations/oauth.get_box_integrations
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
+    timeout: 30
+    events:
+      - http:
+          path: box/integrations
+          method: get
+
   listConnectedUserIntegrations:
     handler: integrations/oauth.list_connected_integrations
     layers:
