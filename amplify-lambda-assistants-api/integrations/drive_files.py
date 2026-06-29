@@ -8,7 +8,7 @@ import random
 from datetime import datetime
 import copy
 from integrations.oauth import IntegrationType, provider_case
-from integrations.oauth import get_user_credentials
+from integrations.oauth import get_user_credentials, refresh_credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from io import BytesIO
@@ -46,14 +46,14 @@ def list_integration_files(event, context, current_user, name, data):
     folder_id = data.get("folder_id")
 
     logger.info(f"Listing files for integration: {integration_provider}")
-    result = list_files(integration_provider, token, folder_id, integration)
+    result = list_files(integration_provider, token, folder_id, integration, current_user)
     if result:
         return {"success": True, "data": result}
 
     return {"success": False, "error": "No integration files found"}
 
 
-def list_files(integration_provider, token, folder_id=None, integration=None):
+def list_files(integration_provider, token, folder_id=None, integration=None, current_user=None):
     """
     Creates an OAuth client for either Google or Microsoft integrations.
     Returns a tuple of (client, is_google_flow) where is_google_flow is used to determine
@@ -135,6 +135,43 @@ def list_files(integration_provider, token, folder_id=None, integration=None):
                     "/microsoft/integrations/list_drive_items",
                     {"folder_id": folder_id if folder_id else "root", "page_size": 100},
                 )
+        case IntegrationType.BOX:
+            # Retrieve Box credentials
+            credentials = get_user_credentials(current_user, integration)
+            box_token = credentials.get("token")
+            headers = {"Authorization": f"Bearer {box_token}"}
+            
+            box_folder_id = folder_id if (folder_id and folder_id != "root") else "0"
+            logger.info("Listing Box files for folder ID: %s", box_folder_id)
+            
+            url = f"https://api.box.com/2.0/folders/{box_folder_id}/items"
+            params = {"fields": "id,name,type,size", "limit": 1000}
+            
+            response = requests.get(url, headers=headers, params=params)
+            if response.status_code == 401:
+                # Try to refresh token
+                refresh_res = refresh_credentials(current_user, integration, credentials)
+                if refresh_res.get("success"):
+                    credentials = get_user_credentials(current_user, integration)
+                    box_token = credentials.get("token")
+                    headers = {"Authorization": f"Bearer {box_token}"}
+                    response = requests.get(url, headers=headers, params=params)
+            
+            if not response.ok:
+                logger.error("Failed to list Box files: %s %s", response.status_code, response.text)
+                return None
+                
+            response_data = response.json()
+            files = []
+            for entry in response_data.get("entries", []):
+                files.append({
+                    "id": entry["id"],
+                    "name": entry["name"],
+                    "mimeType": "folder" if entry["type"] == "folder" else "file",
+                    "size": entry.get("size", 0),
+                    "downloadLink": None
+                })
+            return files
 
     logger.info(f"No result from list_files for integration: {integration_provider}")
     return None
@@ -155,7 +192,7 @@ def download_integration_file(event, context, current_user, name, data):
 
 async def prepare_download_link(integration, integration_provider, file_id, current_user, token, direct_download=False, return_content=False):
     logger.info(f"Starting download for integration {integration_provider}, file {file_id}")
-    result = request_download_link(integration_provider, file_id, token, integration)
+    result = request_download_link(integration_provider, file_id, token, integration, current_user)
     logger.debug(f"Download link result: {result}")
 
     if result and "downloadLink" in result:
@@ -248,7 +285,7 @@ async def prepare_download_link(integration, integration_provider, file_id, curr
         return {"success": False, "error": "Failed to get download link for file"}
 
 
-def request_download_link(integration_provider, file_id, token, integration=None):
+def request_download_link(integration_provider, file_id, token, integration=None, current_user=None):
     """
     Downloads a file from the integration.
     """
@@ -273,6 +310,52 @@ def request_download_link(integration_provider, file_id, token, integration=None
                 return execute_request(
                     token, "/microsoft/integrations/download_file", {"item_id": file_id}
                 )
+        case IntegrationType.BOX:
+            credentials = get_user_credentials(current_user, integration)
+            box_token = credentials.get("token")
+            headers = {"Authorization": f"Bearer {box_token}"}
+            
+            # Get metadata first to get name and size
+            meta_res = requests.get(f"https://api.box.com/2.0/files/{file_id}", headers=headers)
+            if meta_res.status_code == 401:
+                # Try to refresh token
+                refresh_res = refresh_credentials(current_user, integration, credentials)
+                if refresh_res.get("success"):
+                    credentials = get_user_credentials(current_user, integration)
+                    box_token = credentials.get("token")
+                    headers = {"Authorization": f"Bearer {box_token}"}
+                    meta_res = requests.get(f"https://api.box.com/2.0/files/{file_id}", headers=headers)
+            
+            if not meta_res.ok:
+                logger.error("Failed to get Box file metadata: %s %s", meta_res.status_code, meta_res.text)
+                return None
+                
+            file_data = meta_res.json()
+            
+            # Get the download redirect URL
+            dl_res = requests.get(
+                f"https://api.box.com/2.0/files/{file_id}/content",
+                headers=headers,
+                allow_redirects=False
+            )
+            
+            download_url = None
+            if dl_res.status_code in [302, 307]:
+                download_url = dl_res.headers.get("Location")
+            else:
+                logger.error("Failed to get Box download redirect: %s %s", dl_res.status_code, dl_res.text)
+            
+            import mimetypes
+            mime_type, _ = mimetypes.guess_type(file_data.get("name", ""))
+            if not mime_type:
+                mime_type = "application/octet-stream"
+                
+            return {
+                "id": file_data.get("id"),
+                "name": file_data.get("name"),
+                "mimeType": mime_type,
+                "downloadLink": download_url
+            }
 
 
 async def get_file_contents(integration_provider, credentials, file_id, download_url):
@@ -281,6 +364,15 @@ async def get_file_contents(integration_provider, credentials, file_id, download
     )
     try:
         match integration_provider:
+            case IntegrationType.BOX:
+                # Download from the redirect URL directly (no auth headers needed)
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(download_url) as response:
+                        if response.ok:
+                            return await response.read()
+                        else:
+                            logger.error("Failed to download Box file: %s", response.status)
+                            return None
             case IntegrationType.GOOGLE:
                 credentials = Credentials.from_authorized_user_info(credentials)
                 service = build("drive", "v3", credentials=credentials)
@@ -740,7 +832,7 @@ async def process_files_with_cache(files_data, provider_type, token, current_use
                 logger.debug("[FILE CHECK] %s - %s", file_id, file_metadata.get('lastCaptured', 'Never captured'))
 
                 # Check if file needs to be processed
-                needs_update = should_update_file(file_metadata, file_id, provider_type, token, integration_provider)
+                needs_update = should_update_file(file_metadata, file_id, provider_type, token, integration_provider, current_user)
 
                 if needs_update:
                     logger.info("[FILE %s/%s] Updating %s", file_index + 1, total_files, file_id)
@@ -836,7 +928,7 @@ async def process_folders_with_cache(folders_data, provider_type, token, current
             logger.info("[FOLDER %s/%s] Processing: %s", folder_index + 1, total_folders, folder_id)
 
             # Get ALL files from folder and subfolders (flattened)
-            current_folder_files = get_all_files_recursively(folder_id, provider_type, token, None, integration_provider)
+            current_folder_files = get_all_files_recursively(folder_id, provider_type, token, None, integration_provider, current_user)
 
             if current_folder_files is None:
                 logger.error("[FOLDER ERROR] Could not list files in folder %s", folder_id)
@@ -878,7 +970,7 @@ async def process_folders_with_cache(folders_data, provider_type, token, current
                     if file_id in folder_files:
                         # Existing file - check if needs update
                         existing_metadata = folder_files[file_id]
-                        needs_update = should_update_file(existing_metadata, file_id, provider_type, token, integration_provider)
+                        needs_update = should_update_file(existing_metadata, file_id, provider_type, token, integration_provider, current_user)
 
                         if needs_update:
                             logger.info("[FOLDER FILE %s/%s] Updating: %s", file_index + 1, len(current_folder_files), file_id)
@@ -1021,7 +1113,7 @@ async def process_single_file_with_cache(file_id, file_metadata, provider_file, 
         return file_metadata
 
 
-def should_update_file(file_metadata, file_id, provider_type, token, integration=None):
+def should_update_file(file_metadata, file_id, provider_type, token, integration=None, current_user=None):
     """Check if a file needs to be updated based on lastCaptured/syncedAt vs lastModified."""
     # Check for lastCaptured (top-level) or syncedAt (nested in datasource.data)
     last_captured_str = file_metadata.get("lastCaptured")
@@ -1035,7 +1127,7 @@ def should_update_file(file_metadata, file_id, provider_type, token, integration
     try:
         # Get file's last modified date from provider
         logger.debug(f"[TIMESTAMP DEBUG] {file_id} - Getting metadata from {provider_type}")
-        provider_file_info = get_file_metadata_from_provider(file_id, provider_type, token, integration)
+        provider_file_info = get_file_metadata_from_provider(file_id, provider_type, token, integration, current_user)
         logger.debug(f"[TIMESTAMP DEBUG] {file_id} - Raw provider response: {provider_file_info}")
 
         if provider_file_info and (provider_file_info.get("lastModified") or provider_file_info.get("modifiedTime") or provider_file_info.get("lastModifiedDateTime")):
@@ -1069,10 +1161,12 @@ def should_update_file(file_metadata, file_id, provider_type, token, integration
     return False  # Default to no update if can't determine
 
 
-def list_files_in_folder(folder_id, provider_type, token, integration=None):
+def list_files_in_folder(folder_id, provider_type, token, integration=None, current_user=None):
     """Get list of files in a folder from the provider."""
     try:
-        if provider_type == IntegrationType.GOOGLE:
+        if provider_type == IntegrationType.BOX:
+            return list_files(provider_type, token, folder_id, integration, current_user)
+        elif provider_type == IntegrationType.GOOGLE:
             return execute_request(token, "/google/integrations/list_files", {"folderId": folder_id})
         elif provider_type == IntegrationType.MICROSOFT:
             # Handle both microsoft_drive and microsoft_sharepoint
@@ -1096,10 +1190,35 @@ def list_files_in_folder(folder_id, provider_type, token, integration=None):
     return None
 
 
-def get_file_metadata_from_provider(file_id, provider_type, token, integration=None):
+def get_file_metadata_from_provider(file_id, provider_type, token, integration=None, current_user=None):
     """Get file metadata from provider for lastModified comparison."""
     try:
-        if provider_type == IntegrationType.GOOGLE:
+        if provider_type == IntegrationType.BOX:
+            credentials = get_user_credentials(current_user, integration)
+            box_token = credentials.get("token")
+            headers = {"Authorization": f"Bearer {box_token}"}
+            url = f"https://api.box.com/2.0/files/{file_id}"
+            
+            response = requests.get(url, headers=headers)
+            if response.status_code == 401:
+                # Try to refresh token
+                refresh_res = refresh_credentials(current_user, integration, credentials)
+                if refresh_res.get("success"):
+                    credentials = get_user_credentials(current_user, integration)
+                    box_token = credentials.get("token")
+                    headers = {"Authorization": f"Bearer {box_token}"}
+                    response = requests.get(url, headers=headers)
+                    
+            if response.ok:
+                data = response.json()
+                return {
+                    "id": data.get("id"),
+                    "name": data.get("name"),
+                    "mimeType": "file",
+                    "lastModified": data.get("modified_at")
+                }
+            return None
+        elif provider_type == IntegrationType.GOOGLE:
             result = execute_request(token, "/google/integrations/get_file_metadata", {"fileId": file_id})
         elif provider_type == IntegrationType.MICROSOFT:
             # Handle both microsoft_drive and microsoft_sharepoint
@@ -1281,7 +1400,7 @@ def get_file_id(provider_file):
     return None
 
 
-def get_all_files_recursively(folder_id, provider_type, token, visited_folders=None, integration=None):
+def get_all_files_recursively(folder_id, provider_type, token, visited_folders=None, integration=None, current_user=None):
     """
     Recursively get all files from folder and subfolders, flattened.
     Returns a flat list of all files (no nested folder structure).
@@ -1299,7 +1418,7 @@ def get_all_files_recursively(folder_id, provider_type, token, visited_folders=N
     
     try:
         logger.debug(f"[FOLDER] Listing contents of folder: {folder_id}")
-        folder_contents = list_files_in_folder(folder_id, provider_type, token, integration)
+        folder_contents = list_files_in_folder(folder_id, provider_type, token, integration, current_user)
         
         if folder_contents:
             folders_found = 0
@@ -1324,13 +1443,13 @@ def get_all_files_recursively(folder_id, provider_type, token, visited_folders=N
                                     subfolder_path = f"{current_folder_path}/{item['name']}"
                                 subfolder_full_id = f"{current_site_id}:{current_drive_id}:{subfolder_path}"
                                 subfolder_files = get_all_files_recursively(
-                                    subfolder_full_id, provider_type, token, visited_folders, integration
+                                    subfolder_full_id, provider_type, token, visited_folders, integration, current_user
                                 )
                             else:
                                 subfolder_files = []
                         else:
                             subfolder_files = get_all_files_recursively(
-                                subfolder_id, provider_type, token, visited_folders, integration
+                                subfolder_id, provider_type, token, visited_folders, integration, current_user
                             )
                         all_files.extend(subfolder_files)
                         logger.debug("[FOLDER] Found %s files in nested folder %s", len(subfolder_files), subfolder_id)

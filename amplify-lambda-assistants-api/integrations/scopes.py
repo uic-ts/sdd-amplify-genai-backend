@@ -62,4 +62,9 @@ scopes = {
             "Sites.ReadWrite.All",
         ],
     },
+    "box": {
+        "box_drive": [
+            "root_readwrite"
+        ]
+    },
 }

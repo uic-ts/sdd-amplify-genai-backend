@@ -48,6 +48,7 @@ class MissingCredentialsError(Exception):
 class IntegrationType(Enum):
     GOOGLE = "google"
     MICROSOFT = "microsoft"
+    BOX = "box"
 
 
 def provider_case(integration):
@@ -96,6 +97,9 @@ def create_oauth_client(integration, client_config, scopes, origin=None):
                 authority=authority,
             )
             return app, scopes
+        case IntegrationType.BOX:
+            # We don't need a heavy client class for Box; we'll return the config and origin
+            return {"client_config": client_config, "origin": origin}, scopes
     raise ValueError(f"Unsupported integration type: {integration}")
 
 
@@ -132,6 +136,21 @@ def get_authorization_url_and_state(integration, client, scopes=None, admin_cons
             
             logger.debug("Microsoft OAuth authorization URL params: %s", auth_params)
             authorization_url = client.get_authorization_request_url(**auth_params)
+        case IntegrationType.BOX:
+            state = str(uuid.uuid4())
+            client_config = client["client_config"]
+            origin = client["origin"]
+            redirect_uri = build_redirect_uri(origin)
+            scope_str = " ".join(scopes) if scopes else ""
+            import urllib.parse
+            authorization_url = (
+                f"{client_config.get('auth_uri')}?response_type=code"
+                f"&client_id={client_config.get('client_id')}"
+                f"&redirect_uri={urllib.parse.quote(redirect_uri)}"
+                f"&state={state}"
+            )
+            if scope_str:
+                authorization_url += f"&scope={urllib.parse.quote(scope_str)}"
 
     return authorization_url, state
 
@@ -159,6 +178,24 @@ def acquire_token_from_code(integration, client, scopes, authorization_code):
                 code=authorization_code, scopes=scopes, redirect_uri=redirect_uri
             )
             return result
+        case IntegrationType.BOX:
+            client_config = client["client_config"]
+            origin = client["origin"]
+            redirect_uri = build_redirect_uri(origin)
+            token_url = client_config.get("token_uri", "https://api.box.com/oauth2/token")
+            data = {
+                "grant_type": "authorization_code",
+                "code": authorization_code,
+                "client_id": client_config.get("client_id"),
+                "client_secret": client_config.get("client_secret"),
+                "redirect_uri": redirect_uri
+            }
+            logger.info("Acquiring token from Box using URL %s", token_url)
+            response = requests.post(token_url, data=data)
+            if response.status_code != 200:
+                logger.error("Box token exchange failed: %s %s", response.status_code, response.text)
+                raise Exception(f"Box token exchange failed: {response.text}")
+            return response.json()
     raise ValueError(f"Unsupported integration type: {integration}")
 
 
@@ -239,6 +276,19 @@ def serialize_credentials(integration, credentials):
             credentials_dict["expires_at"] = get_expiration_time(
                 credentials_dict["expires_in"]
             )
+        case IntegrationType.BOX:
+            if ("error" in credentials or "error_description" in credentials):
+                logger.error("Error serializing Box credentials: %s", credentials)
+                raise Exception(f"Error serializing Box credentials: {credentials}")
+                
+            credentials_dict = {
+                "token": credentials.get("access_token"),
+                "expires_in": credentials.get("expires_in"),
+                "refresh_token": credentials.get("refresh_token"),
+            }
+            credentials_dict["expires_at"] = get_expiration_time(
+                credentials_dict["expires_in"]
+            )
         case _:
             # CRITICAL: Unsupported integration type - user can't connect integration
             log_critical_error(
@@ -272,6 +322,10 @@ def extract_refresh_response(integration, response_data, credentials):
             credentials["token"] = response_data["access_token"]
 
         case IntegrationType.MICROSOFT:
+            credentials["token"] = response_data["access_token"]
+            if "refresh_token" in response_data:
+                credentials["refresh_token"] = response_data["refresh_token"]
+        case IntegrationType.BOX:
             credentials["token"] = response_data["access_token"]
             if "refresh_token" in response_data:
                 credentials["refresh_token"] = response_data["refresh_token"]
@@ -340,12 +394,11 @@ def get_user_credentials(current_user, integration):
 
 def get_oauth_client_credentials(integration):
     """
-    Gets OA
-    uth client credentials for either Google or Microsoft clients.
+    Gets OAuth client credentials for either Google or Microsoft clients.
     """
     config, _ = get_oauth_integration_parameter(integration)
     client_config = config["web"]
-    client_id = (client_config["client_id"],)
+    client_id = client_config["client_id"]
     client_secret = client_config["client_secret"]
     tenant_id = client_config.get("tenant_id", client_config.get("project_id", ""))
     token_uri = client_config.get("token_uri", None)
@@ -1243,6 +1296,9 @@ def format_integration_param(
             param_data["token_uri"] = (
                 f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
             )
+        case IntegrationType.BOX.value:
+            param_data["auth_uri"] = "https://account.box.com/api/oauth2/authorize"
+            param_data["token_uri"] = "https://api.box.com/oauth2/token"
 
     configuration = {"client_config": {"web": param_data}, "scopes": integration_scopes}
     return configuration
