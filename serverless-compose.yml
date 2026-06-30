@@ -52,6 +52,22 @@ services:
     path: ./object-access
     dependsOn:
       - amplify-lambda
+
+  amplify-lambda-assistants-api:
+    path: ./amplify-lambda-assistants-api
+    dependsOn:
+      - amplify-lambda
+
+  amplify-lambda-assistants-api-google:
+    path: ./amplify-lambda-assistants-api-google
+    dependsOn:
+      - amplify-lambda
+
+  amplify-lambda-assistants-api-office365:
+    path: ./amplify-lambda-assistants-api-office365
+    dependsOn:
+      - amplify-lambda
+
   
 
 
