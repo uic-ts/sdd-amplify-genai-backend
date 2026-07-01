@@ -890,7 +890,7 @@ def return_html_failed_auth(message):
 @validated("list_integrations")
 def list_connected_integrations(event, context, current_user, name, data):
     supported_integrations = get_available_integrations()
-    if not supported_integrations:
+    if supported_integrations is None:
         return {
             "success": False,
             "message": f"Error retrieving user integrations from Admin Table",
@@ -1067,7 +1067,7 @@ def delete_integration(current_user, integration):
 @validated("list_integrations")
 def get_supported_integrations(event, context, current_user, name, data):
     supported_integrations = get_available_integrations()
-    if supported_integrations:
+    if supported_integrations is not None:
         return {"success": True, "data": supported_integrations}
     else:
         return {
