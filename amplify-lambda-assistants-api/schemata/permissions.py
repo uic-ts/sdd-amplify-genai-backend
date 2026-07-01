@@ -39,6 +39,9 @@ permissions_by_state_type = {
     "/integrations/list_supported": {
         "list_integrations": lambda for_user, with_data: True
     },
+    "/box/integrations": {
+        "get": lambda for_user, with_data: True
+    },
     "/integrations/user/files": {"list_files": lambda for_user, with_data: True},
     "/integrations/user/files/download": {
         "download_file": lambda for_user, with_data: True
