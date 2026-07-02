@@ -17,7 +17,7 @@ custom:
   depName: ${self:custom.stageVars.DEP_NAME}
 
   pythonRequirements:
-    dockerizePip: non-linux
+    dockerizePip: true
     layer: true
     slim: true
     slimPatternsAppendDefaults: true
