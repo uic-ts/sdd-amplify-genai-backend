@@ -140,6 +140,8 @@ functions:
       - http:
           path: integrations/user/files
           method: post
+    environment:
+      OAUTH_ENCRYPTION_PARAMETER: /${self:service}/${sls:stage}/oauth/integrations/encryption #must start with /
 
   uploadIntegrationFiles:
     handler: integrations/drive_files.drive_files_to_data_sources
