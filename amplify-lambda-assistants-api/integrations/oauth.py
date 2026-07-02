@@ -98,7 +98,11 @@ def create_oauth_client(integration, client_config, scopes, origin=None):
             )
             return app, scopes
         case IntegrationType.BOX:
-            # We don't need a heavy client class for Box; we'll return the config and origin
+            # Unwrap "web" nesting if present — admin UI stores: client_config={"web": {...}}
+            # Manual SSM stores flat: client_config={"client_id": ..., ...}
+            # Normalize to flat so downstream code always gets client_id/client_secret directly.
+            if isinstance(client_config, dict) and "web" in client_config:
+                client_config = client_config["web"]
             return {"client_config": client_config, "origin": origin}, scopes
     raise ValueError(f"Unsupported integration type: {integration}")
 
@@ -394,10 +398,14 @@ def get_user_credentials(current_user, integration):
 
 def get_oauth_client_credentials(integration):
     """
-    Gets OAuth client credentials for either Google or Microsoft clients.
+    Gets OAuth client credentials for Google, Microsoft, or Box clients.
     """
     config, _ = get_oauth_integration_parameter(integration)
-    client_config = config["web"]
+    # Google/Microsoft store config as: {"web": {"client_id": ..., ...}}
+    # Box (admin UI) stores as:         {"web": {"client_id": ..., ...}}
+    # Box (manual SSM) stores as:       {"client_id": ..., ...}  (flat, no "web" wrapper)
+    # .get("web", config) normalizes both: returns the inner dict if "web" exists, else the dict itself.
+    client_config = config.get("web", config)
     client_id = client_config["client_id"]
     client_secret = client_config["client_secret"]
     tenant_id = client_config.get("tenant_id", client_config.get("project_id", ""))
@@ -1393,7 +1401,10 @@ def get_box_integrations(event, context, current_user, name, data):
     if secrets_value:
         try:
             secrets_json = json.loads(secrets_value)
-            secrets_data = secrets_json.get("client_config", {})
+            raw_config = secrets_json.get("client_config", {})
+            # Normalize: admin UI writes {"client_config": {"web": {...}}}
+            #            manual SSM writes {"client_config": {"client_id": ..., ...}}
+            secrets_data = raw_config.get("web", raw_config)
             secrets["client_id"] = secrets_data.get("client_id", "")
             secrets["client_secret"] = secrets_data.get("client_secret", "")
             secrets["tenant_id"] = secrets_json.get("tenant_id", "amplifygenai")
