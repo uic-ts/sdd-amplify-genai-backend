@@ -528,19 +528,9 @@ export async function shouldEnableWebSearch(body) {
         return true;
     }
 
-    // No explicit flag — fall back to admin config in DynamoDB/SSM
-    logger.info(`🔍 shouldEnableWebSearch: no frontend flag set, checking admin config...`);
-    try {
-        const adminKey = await getAdminWebSearchApiKey();
-        const result = adminKey !== null;
-        logger.info(`🔍 shouldEnableWebSearch: admin config result=${result}`, {
-            provider: adminKey?.provider ?? 'none'
-        });
-        return result;
-    } catch (err) {
-        logger.warn(`🔍 shouldEnableWebSearch: error reading admin config, defaulting to false`, { error: err.message });
-        return false;
-    }
+    // No explicit flag — default to disabled. Frontend must opt in explicitly.
+    logger.info(`🔍 shouldEnableWebSearch: no frontend flag set, defaulting to false (opt-in only)`);
+    return false;
 }
 
 export default {
