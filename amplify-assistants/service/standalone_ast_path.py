@@ -23,6 +23,7 @@ from pycommon.api.amplify_groups import (
 
 from pycommon.api.data_sources import (
     translate_user_data_sources_to_hash_data_sources,
+    extract_key,
 )
 
 from pycommon.api.ops import api_tool
@@ -690,6 +691,8 @@ def add_assistant_path(event, context, current_user, name, data):
 
                 for ds in data_sources + filtered_drive_ds:
                     ds_key = ds["id"]
+                    if not ds_key.startswith("bedrock-kb://") and "://" in ds_key:
+                        ds_key = extract_key(ds_key)
                     try:
                         object_access_table.put_item(
                         Item={
