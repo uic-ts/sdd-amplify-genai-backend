@@ -42,22 +42,15 @@ jobs:
             echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Checkout Sync Branch
-        if: steps.check-changes.outputs.has_changes == 'true'
-        run: |
-          git checkout -b integration/sync-upstream-changes
-
       - name: Attempt Merge
         if: steps.check-changes.outputs.has_changes == 'true'
         id: merge
         run: |
-          if git merge upstream/main --no-edit; then
+          if git merge upstream/main --no-commit --no-ff; then
             echo "conflicts=false" >> $GITHUB_OUTPUT
           else
             echo "conflicts=true" >> $GITHUB_OUTPUT
-            # Abort so git state is clean, create-pull-request handles the sync
             git merge --abort
-            # We will pull in conflicts using a standard checkout of upstream files if they choose to resolve it
           fi
 
       - name: Create Pull Request
