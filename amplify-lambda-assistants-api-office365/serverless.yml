@@ -17,6 +17,8 @@ custom:
   depName: ${self:custom.stageVars.DEP_NAME}
   pythonRequirements:
     dockerizePip: true
+    useDownloadCache: false
+    useStaticCache: false
 
 
   cf-changesets:
