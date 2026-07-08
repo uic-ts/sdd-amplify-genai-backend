@@ -16,7 +16,7 @@ custom:
   stageVars: ${file(../var/${self:provider.stage}-var.yml)}
   depName: ${self:custom.stageVars.DEP_NAME}
   pythonRequirements:
-    dockerizePip: non-linux
+    dockerizePip: true
 
 
   cf-changesets:
