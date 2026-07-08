@@ -489,7 +489,7 @@ update_admin_config_schema = {
                                     "integrations": {
                                         "type": "object",
                                         "patternProperties": {
-                                            "^(google|microsoft|drive|github|slack)$": {
+                                            "^(google|microsoft|drive|github|slack|box)$": {
                                                 "type": "array",
                                                 "items": {
                                                     "type": "object",
