@@ -2,8 +2,10 @@ name: Sync Upstream Changes (PR Creator)
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Run daily at midnight
+    - cron: '0 */3 * * *' # Run every 3 hours
   workflow_dispatch:      # Allow manual trigger
+  repository_dispatch:    # Allow manual trigger from parent repo
+    types: [upstream_commit, upstream_release]
 
 permissions:
   contents: write
@@ -50,7 +52,8 @@ jobs:
             echo "conflicts=false" >> $GITHUB_OUTPUT
           else
             echo "conflicts=true" >> $GITHUB_OUTPUT
-            git merge --abort
+            # Stage the conflict markers so they can be committed by the create-pull-request action
+            git add -A
           fi
 
       - name: Create Pull Request
