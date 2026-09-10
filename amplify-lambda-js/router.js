@@ -2,6 +2,7 @@
 //Authors: Jules White, Allen Karns, Karely Rodriguez, Max Moundas
 
 import { getLogger } from "./common/logging.js";
+import { buildAccount } from "./common/accountInfo.js";
 import { ModelTypes, getModelByType } from "./common/params.js"
 import { createRequestState, deleteRequestState, updateKillswitch, localKill } from "./requests/requestState.js";
 import { sendStateEventToStream, TraceStream, sendStatusEventToStream, forceFlush } from "./common/streams.js";
@@ -95,13 +96,14 @@ const routeRequestCore = async (params, returnResponse, responseStream) => {
             // Handle skills request
             logger.info("Processing skills request");
             // Build account object (needed by accounting/LLM calls such as skill screening)
-            params.account = {
+            // 🔒 Canonical account object (single constructor shared with main chat + accounting).
+            params.account = buildAccount({
                 user: params.user,
                 username: params.username,
                 accessToken: params.accessToken,
-                accountId: params.body?.options?.accountId,
-                apiKeyId: params.apiKeyId
-            };
+                apiKeyId: params.apiKeyId,
+                options: params.body?.options
+            });
             // Populate model shortcuts so skill screening can use cheapestModel etc.
             try {
                 let userModelData = await CacheManager.getCachedUserModels(params.user, params.accessToken);
@@ -231,16 +233,23 @@ const routeRequestCore = async (params, returnResponse, responseStream) => {
             // Check rate limit result first (early exit if rate limited)
             if (rateLimitResult) {
                 const rateLimitInfo = params.body.options.rateLimit;
-                let errorMessage = "Request limit reached."
+                let errorMessage = "Current request exceeds allowed rate limit.";
                 if (rateLimitInfo) {
-                    const currentRate = rateLimitInfo.currentSpent ? `Current Spent: ${formatCurrentSpent(rateLimitInfo)}` : "";
-                    const rateLimitStr = `${rateLimitInfo.adminSet ? "Amplify " : ""}Set Rate limit: ${formatRateLimit(rateLimitInfo)}`;
-                    errorMessage = `${errorMessage} ${currentRate} ${rateLimitStr}`;
+
+                    if (rateLimitInfo.adminSet) {
+                        // Keep admin rate limit message concise to avoid exposing internal limits
+                        errorMessage = `Amplify Admin ${rateLimitInfo?.period?.toLowerCase() || ""} rate limit exceeded`;
+                    } else {
+                        const currentRate = rateLimitInfo.currentSpent ? `Current Spent: ${formatCurrentSpent(rateLimitInfo)}` : "";
+                        const rateLimitStr = `Set Rate limit: ${formatRateLimit(rateLimitInfo)}`;
+                        errorMessage = `${errorMessage} ${currentRate} ${rateLimitStr}`;
+                    }
+                    
                 }
                 logger.warn(`🚫 Rate limit exceeded for user ${params.user}: ${errorMessage}`);
                 return returnResponse(responseStream, {
                     statusCode: 429,
-                    statusText: "Request limit reached. Please try again in a few minutes.",
+                    statusText: "Request limit reached.",
                     body: { error: errorMessage }
                 });
             }
@@ -374,13 +383,34 @@ const routeRequestCore = async (params, returnResponse, responseStream) => {
             options.advancedModel = getModelByType(params, ModelTypes.ADVANCED);
             options.documentCachingModel = getModelByType(params, ModelTypes.DOCUMENT_CACHING);
 
-            // ensure the model id in the body and options is consitent with the changes 
+            // ensure the model id in the body and options is consitent with the changes
             let body = { ...params.body, options: options, model: model.id };
             logger.debug("Checking access on data sources");
             logger.info("Request options.", options);
             logger.info("Request data sources", dataSources);
 
             delete body.dataSources;
+
+            // Collect every file key across all conversation messages before smart-messages
+            // may prune body.messages, so renew_session can still restore pruned files.
+            const allConversationDataSources = (body.messages || []).flatMap(m => m.data?.dataSources ?? []);
+            const allConversationFileKeys = [
+                ...new Set(
+                    allConversationDataSources
+                        .map(d => d.id)
+                        .filter(Boolean)
+                )
+            ];
+            if (allConversationFileKeys.length > 0) {
+                body.allConversationFileKeys = allConversationFileKeys;
+                const allConversationFileNames = {};
+                for (const d of allConversationDataSources) {
+                    if (d.id && d.name) allConversationFileNames[d.id] = d.name;
+                }
+                if (Object.keys(allConversationFileNames).length > 0) {
+                    body.allConversationFileNames = allConversationFileNames;
+                }
+            }
 
 
             // ⚡ Create request state 
@@ -398,13 +428,14 @@ const routeRequestCore = async (params, returnResponse, responseStream) => {
             logger.debug("Calling chat with data");
 
             const assistantParams = {
-                account: {
+                // 🔒 Canonical account object (single constructor shared with skills + accounting).
+                account: buildAccount({
                     user: params.user,
                     username: params.username,  // Clean username for services like tool API key lookup
                     accessToken: params.accessToken,
-                    accountId: options.accountId,
-                    apiKeyId: params.apiKeyId
-                },
+                    apiKeyId: params.apiKeyId,
+                    options
+                }),
                 model,
                 requestId,
                 options,

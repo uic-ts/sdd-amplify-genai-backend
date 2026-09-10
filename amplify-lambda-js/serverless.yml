@@ -29,7 +29,7 @@ custom:
   prune:
     automatic: false
     includeLayers: true
-    number: 20    
+    number: 10    
 
 
 provider:
@@ -152,19 +152,11 @@ functions:
   # provides real-time usage information via API gateway
   mtd_cost_reporter:
     handler: billing/mtd.handler
+    timeout: 30
     memorySize: 128
     events:
       - http:
           path: billing/mtd-cost
-          method: post
-          cors: true
-
-  api_key_user_cost:
-    handler: billing/mtd.apiKeyUserCostHandler
-    memorySize: 128
-    events:
-      - http:
-          path: billing/api-key-user-cost
           method: post
           cors: true
 
@@ -180,6 +172,7 @@ functions:
 
   list_all_user_mtd_costs:
     handler: billing/mtd.listAllUserMtdCostsHandler
+    timeout: 30
     memorySize: 128
     events:
       - http:
@@ -189,6 +182,7 @@ functions:
         
   list_user_mtd_costs:
     handler: billing/mtd.listUserMtdCostsHandler
+    timeout: 30
     memorySize: 128
     events:
       - http:
@@ -230,7 +224,6 @@ functions:
 
 resources:
   Resources:
-   
 
     LambdaJSIAMPolicy:
       Type: AWS::IAM::ManagedPolicy
