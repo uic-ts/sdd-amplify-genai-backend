@@ -118,7 +118,7 @@ const getApiKeyDetails = async (identifier) => {
                 ExpressionAttributeValues: {
                     ':apiKeyVal': identifier
                 },
-                ProjectionExpression: 'api_owner_id, purpose'
+                ProjectionExpression: 'api_owner_id, purpose, applicationName'
             });
         } else {
             // It's an api_owner_id - query by primary key
@@ -128,28 +128,34 @@ const getApiKeyDetails = async (identifier) => {
                 ExpressionAttributeValues: {
                     ':ownerIdVal': identifier
                 },
-                ProjectionExpression: 'api_owner_id, purpose'
+                ProjectionExpression: 'api_owner_id, purpose, applicationName'
             });
         }
 
         const response = await dynamoDB.send(command);
         const item = response.Items?.[0];
-        
+
         if (item) {
             return {
                 purpose: item.purpose || null,
+                // Friendly, human-readable key name (e.g. "Scheduling app").
+                // The api-keys table stores this in `applicationName`; it is
+                // distinct from `purpose` (which is often null), so we surface
+                // it separately for display.
+                applicationName: item.applicationName || null,
                 id: item.api_owner_id || identifier
             };
         } else {
             return {
                 purpose: null,
+                applicationName: null,
                 id: `legacy_${identifier}`
             };
         }
-        
+
     } catch (error) {
         logger.warn(`Failed to get API key details: ${identifier}`, error);
-        return { purpose: null, id: `legacy_${identifier}` };
+        return { purpose: null, applicationName: null, id: `legacy_${identifier}` };
     }
 };
 
@@ -211,192 +217,29 @@ const processAccountInfo = async (accountInfo) => {
         return accountInfo; // Keep as-is for NA or missing access
     }
 
-    const { purpose, id } = await getApiKeyDetails(access);
-    const newAccount = purpose ? `${purpose}_account` : account;
+    const { purpose, applicationName, id } = await getApiKeyDetails(access);
+    // Keep the original account label exactly as before (legacy behavior):
+    //   - `${purpose}_account` when a purpose is set, otherwise the raw account.
+    // Then, if we have a friendly app name (e.g. "Scheduling app"), APPEND it
+    // in parentheses rather than replacing the account label, so the operator
+    // still sees the underlying account id and the human-readable name.
+    let newAccount = purpose ? `${purpose}_account` : account;
+    if (applicationName) {
+        newAccount = `${newAccount} (${applicationName})`;
+    }
     return `${newAccount}#${id}`;
 };
 
-const internalApiKeyUserCostHandler = async (event, context, callback) => {
-    let params = null;
+// Helper function to resolve an amp- API key (or api_owner_id) to its api_owner_id.
+// Returns the resolved id, or the original identifier if it cannot be resolved.
+// Never throws — callers rely on graceful fallback behaviour.
+const resolveApiKeyToId = async (identifier) => {
     try {
-        params = await extractParams(event);
-        if (params.statusCode) return params;
-
-        const { body, user } = params;
-        if (!body?.data?.apiKeys || !Array.isArray(body.data.apiKeys) || !user) {
-            return {
-                statusCode: 400,
-                body: JSON.stringify({ error: 'API keys array and email are required' }),
-            };
-        }
-
-        const apiKeys = body.data.apiKeys;
-        const email = user;
-
-        if (!historyCostDynamoTableName || !costDynamoTableName) {
-            logger.error("Missing required table names");
-            return {
-                statusCode: 500,
-                body: JSON.stringify({ error: 'Server configuration error' }),
-            };
-        }
-
-        // Resolve all amp- keys to their IDs in parallel
-        const resolvedKeys = await Promise.all(
-            apiKeys.map(async (key) => ({
-                original: key,
-                resolved: await resolveApiKeyToId(key)
-            }))
-        );
-
-        // Build key mapping for efficient lookup
-        const keyMapping = new Map();
-        resolvedKeys.forEach(({ original, resolved }) => {
-            keyMapping.set(original, resolved);
-            keyMapping.set(resolved, original);
-        });
-
-        // Query current costs efficiently using GSI if available
-        const currentCostPromises = apiKeys.map(async (apiKey) => {
-            const resolvedKey = keyMapping.get(apiKey) || apiKey;
-            
-            // Query by user email to get all their cost records
-            const queryParams = {
-                TableName: costDynamoTableName,
-                KeyConditionExpression: 'id = :email',
-                ExpressionAttributeValues: {
-                    ':email': email,
-                },
-                ProjectionExpression: 'accountInfo, dailyCost, monthlyCost, hourlyCost, record_type'
-            };
-
-            const result = await dynamoDB.send(new QueryCommand(queryParams));
-            
-            // Filter for records matching this API key
-            const matchingRecords = result.Items?.filter(item => {
-                if (!item.accountInfo) return false;
-                const [, access] = item.accountInfo.split('#');
-                return access === apiKey || access === resolvedKey;
-            }) || [];
-
-            return { apiKey, records: matchingRecords };
-        });
-
-        // Process history table more efficiently using parallel queries if possible
-        const historyPromises = apiKeys.map(async (apiKey) => {
-            const resolvedKey = keyMapping.get(apiKey) || apiKey;
-            
-            // For history table, we still need to scan but can optimize
-            const scanParams = {
-                TableName: historyCostDynamoTableName,
-                FilterExpression: '(contains(#accountInfo, :apiKey) OR contains(#accountInfo, :resolvedKey)) AND attribute_exists(#accountInfo)',
-                ExpressionAttributeNames: {
-                    '#accountInfo': 'accountInfo'
-                },
-                ExpressionAttributeValues: {
-                    ':apiKey': `#${apiKey}`,
-                    ':resolvedKey': `#${resolvedKey}`
-                },
-                ProjectionExpression: 'accountInfo, dailyCost, monthlyCost, userDate, #time',
-                ExpressionAttributeNames: {
-                    '#accountInfo': 'accountInfo',
-                    '#time': 'time'
-                }
-            };
-
-            let allItems = [];
-            let lastEvaluatedKey = null;
-            
-            do {
-                if (lastEvaluatedKey) {
-                    scanParams.ExclusiveStartKey = lastEvaluatedKey;
-                }
-                
-                const result = await dynamoDB.send(new ScanCommand(scanParams));
-                allItems = allItems.concat(result.Items || []);
-                lastEvaluatedKey = result.LastEvaluatedKey;
-            } while (lastEvaluatedKey);
-
-            return { apiKey, historyRecords: allItems };
-        });
-
-        // Wait for all queries to complete
-        const [currentCostResults, historyResults] = await Promise.all([
-            Promise.all(currentCostPromises),
-            Promise.all(historyPromises)
-        ]);
-
-        // Aggregate results
-        const results = {};
-        
-        apiKeys.forEach((apiKey, index) => {
-            const currentData = currentCostResults[index];
-            const historyData = historyResults[index];
-            
-            let totalApiKeyCost = 0;
-            let userApiKeyCost = 0;
-            let timestamps = [];
-            
-            // Process current cost records
-            currentData.records.forEach(record => {
-                const dailyCost = parseFloat(record.dailyCost) || 0;
-                const monthlyCost = parseFloat(record.monthlyCost) || 0;
-                totalApiKeyCost += dailyCost + monthlyCost;
-                userApiKeyCost += dailyCost + monthlyCost;
-            });
-            
-            // Process history records
-            historyData.historyRecords.forEach(record => {
-                const dailyCost = parseFloat(record.dailyCost) || 0;
-                const monthlyCost = parseFloat(record.monthlyCost) || 0;
-                const cost = dailyCost + monthlyCost;
-                
-                totalApiKeyCost += cost;
-                
-                if (record.userDate?.startsWith(email)) {
-                    userApiKeyCost += cost;
-                }
-                
-                if (record.time) {
-                    timestamps.push(record.time);
-                }
-            });
-            
-            results[apiKey] = {
-                totalApiKeyCost,
-                userApiKeyCost,
-                resolvedApiKeyId: keyMapping.get(apiKey),
-                recordCount: currentData.records.length + historyData.historyRecords.length,
-                latestTimestamp: timestamps.length > 0 ? 
-                    timestamps.sort().reverse()[0] : null
-            };
-        });
-
-        return {
-            statusCode: 200,
-            body: JSON.stringify({
-                email,
-                results,
-                timestamp: new Date().toISOString()
-            }),
-        };
+        const { id } = await getApiKeyDetails(identifier);
+        return id || identifier;
     } catch (error) {
-        logger.error("Error processing request:", error);
-        await logCriticalError({
-            functionName: 'internalApiKeyUserCostHandler',
-            errorType: 'ApiKeyUserCostFailure',
-            errorMessage: `API key user cost query failed: ${error.message}`,
-            currentUser: params?.user || 'unknown',
-            severity: 'HIGH',
-            stackTrace: error.stack || '',
-            context: {
-                email: params?.user || 'unknown'
-            }
-        });
-        return {
-            statusCode: 500,
-            body: JSON.stringify({ error: 'Internal server error' }),
-        };
+        logger.warn(`resolveApiKeyToId: could not resolve '${identifier}': ${error.message}`);
+        return identifier;
     }
 };
 
@@ -507,149 +350,56 @@ const internalListAllUserMtdCostsHandler = async (event, context, callback) => {
             };
         }
 
-        // Try GSI first, if no results check if we need to backfill
-        logger.info("Starting cost data retrieval from GSI");
+        // Retrieve ALL cost rows via a paginated table Scan.
+        //
+        // We deliberately do NOT use the `record-type-user-index` GSI here.
+        // The GSI only indexes rows that have `record_type = 'cost'` stamped on
+        // them. Any cost row missing that attribute (e.g. written by an older
+        // code path) is invisible to the GSI and would be silently dropped from
+        // the admin view — that is exactly how rows like the "Scheduling app"
+        // account went missing here while still appearing in the per-user
+        // breakdown (which queries by `id` directly).
+        //
+        // A Scan returns every row regardless of `record_type`, so the admin
+        // modal sees the complete picture. It is still paginated via
+        // LastEvaluatedKey, so the frontend's batched auto-loading is unchanged.
+        logger.info("Starting cost data retrieval via paginated table scan");
         let result;
-        let needsBackfill = false;
-        const gsiStartTime = Date.now();
+        const scanStartTime = Date.now();
 
-        try {
-            // Query the GSI to get all cost records efficiently
-            const queryParams = {
-                TableName: costDynamoTableName,
-                IndexName: 'record-type-user-index',
-                KeyConditionExpression: 'record_type = :type',
-                ExpressionAttributeValues: {
-                    ':type': 'cost'
-                },
-                Limit: Math.min(pageSize * 15, 5000), // Optimized: Get more records to aggregate users efficiently
-            };
+        const scanParams = {
+            TableName: costDynamoTableName,
+            Limit: Math.min(pageSize * 15, 5000),
+        };
 
-            if (lastEvaluatedKey) {
-                queryParams.ExclusiveStartKey = lastEvaluatedKey;
-            }
-
-            logger.info("Querying GSI", { 
-                tableName: costDynamoTableName, 
-                indexName: 'record-type-user-index',
-                limit: queryParams.Limit,
-                hasPaginationKey: !!lastEvaluatedKey
-            });
-            
-            const queryCommand = new QueryCommand(queryParams);
-            result = await dynamoDB.send(queryCommand);
-            
-            const gsiDuration = Date.now() - gsiStartTime;
-            logger.info("GSI query completed", { 
-                itemsFound: result.Items?.length || 0,
-                duration: gsiDuration,
-                hasNextPage: !!result.LastEvaluatedKey
-            });
-            
-            // If no items found in GSI, check if there are records without record_type
-            if (!result.Items || result.Items.length === 0) {
-                logger.info("No records found in GSI, checking for legacy records without record_type");
-                
-                // Quick scan to see if there are any records at all
-                const checkScanParams = {
-                    TableName: costDynamoTableName,
-                    Limit: 1 // Just check if any records exist
-                };
-
-                const checkScanCommand = new ScanCommand(checkScanParams);
-                const checkResult = await dynamoDB.send(checkScanCommand);
-                
-                if (checkResult.Items && checkResult.Items.length > 0) {
-                    needsBackfill = true;
-                    logger.warn("Found legacy records without record_type, backfill needed", {
-                        legacyRecordsFound: checkResult.Items.length
-                    });
-                } else {
-                    logger.info("No cost records found in database at all");
-                }
-            }
-        } catch (error) {
-            logger.error("Error querying GSI", { 
-                error: error.message, 
-                tableName: costDynamoTableName,
-                indexName: 'record-type-user-index'
-            });
-            needsBackfill = true;
+        if (lastEvaluatedKey) {
+            scanParams.ExclusiveStartKey = lastEvaluatedKey;
         }
 
-        // Auto-trigger backfill if needed (admin already verified)
-        if (needsBackfill) {
-            logger.info("Triggering automatic backfill for record_type field");
-            const backfillStartTime = Date.now();
-            
-            try {
-                // Import and run backfill function directly
-                const { handler: backfillHandler } = await import('./backfill.js');
-                const backfillResult = await backfillHandler({}, {});
-                
-                const backfillDuration = Date.now() - backfillStartTime;
-                logger.info("Backfill completed successfully", { 
-                    duration: backfillDuration,
-                    result: backfillResult 
-                });
-                
-                // Now retry the GSI query
-                logger.info("Retrying GSI query after backfill");
-                const retryQueryParams = {
-                    TableName: costDynamoTableName,
-                    IndexName: 'record-type-user-index',
-                    KeyConditionExpression: 'record_type = :type',
-                    ExpressionAttributeValues: {
-                        ':type': 'cost'
-                    },
-                    Limit: pageSize * 10,
-                };
+        logger.info("Scanning cost table", {
+            tableName: costDynamoTableName,
+            limit: scanParams.Limit,
+            hasPaginationKey: !!lastEvaluatedKey
+        });
 
-                if (lastEvaluatedKey) {
-                    retryQueryParams.ExclusiveStartKey = lastEvaluatedKey;
-                }
+        const scanCommand = new ScanCommand(scanParams);
+        result = await dynamoDB.send(scanCommand);
 
-                const retryQueryCommand = new QueryCommand(retryQueryParams);
-                result = await dynamoDB.send(retryQueryCommand);
-                
-                logger.info("Post-backfill GSI query completed", { 
-                    itemsFound: result.Items?.length || 0 
-                });
-                
-            } catch (backfillError) {
-                logger.error("Auto-backfill failed, falling back to table scan", { 
-                    error: backfillError.message,
-                    backfillDuration: Date.now() - backfillStartTime
-                });
-                
-                // Fallback to scan if backfill fails
-                const fallbackScanParams = {
-                    TableName: costDynamoTableName,
-                    Limit: pageSize * 10,
-                };
-
-                if (lastEvaluatedKey) {
-                    fallbackScanParams.ExclusiveStartKey = lastEvaluatedKey;
-                }
-
-                logger.info("Executing fallback table scan");
-                const fallbackScanCommand = new ScanCommand(fallbackScanParams);
-                result = await dynamoDB.send(fallbackScanCommand);
-                
-                logger.info("Fallback scan completed", { 
-                    itemsFound: result.Items?.length || 0 
-                });
-            }
-        }
+        const scanDuration = Date.now() - scanStartTime;
+        logger.info("Scan completed", {
+            itemsFound: result.Items?.length || 0,
+            duration: scanDuration,
+            hasNextPage: !!result.LastEvaluatedKey
+        });
 
         // Aggregate costs by user with improved accountInfo handling
         logger.info("Starting cost aggregation by user");
         const aggregationStartTime = Date.now();
         const userCosts = new Map();
         let totalRecordsProcessed = 0;
-        
+
         // Process items and resolve amp- keys
-        await Promise.all(result.Items.map(async (item) => {
+        await Promise.all((result.Items || []).map(async (item) => {
             const email = item.id;
             let accountInfo = item.accountInfo || 'Unknown Account';
             const dailyCost = parseFloat(item.dailyCost) || 0;
@@ -895,7 +645,7 @@ const internalBillingGroupsCostsHandler = async (event, context, callback) => {
 
             // Parse the groups data
             allGroups = groupsResult.Item.data;
-            logger.info("Successfully fetched amplify groups", { 
+            logger.info("Successfully fetched amplify groups", {
                 groupCount: Object.keys(allGroups).length,
                 firstFewGroups: Object.keys(allGroups).slice(0, 3),
                 dataStructure: typeof allGroups
@@ -1195,12 +945,32 @@ const internalBillingGroupsCostsHandler = async (event, context, callback) => {
             
             // Get group configuration
             const groupConfig = allGroups[groupName];
-            
+
+            // Extract rate limit - handle both document and raw DynamoDB formats
+            let rateLimitInfo = null;
+            const rawRateLimit = groupConfig.rateLimit || groupConfig.M?.rateLimit;
+            if (rawRateLimit) {
+                if (Array.isArray(rawRateLimit)) {
+                    // Direct array format: [{ rate: 9999.99, period: 'daily' }, ...]
+                    rateLimitInfo = rawRateLimit;
+                } else if (rawRateLimit.L) {
+                    // DynamoDB List format
+                    rateLimitInfo = rawRateLimit.L.map(item => {
+                        const obj = {};
+                        if (item.M) {
+                            if (item.M.rate && item.M.rate.N) obj.rate = parseFloat(item.M.rate.N);
+                            if (item.M.period && item.M.period.S) obj.period = item.M.period.S;
+                        }
+                        return obj;
+                    });
+                }
+            }
+
             billingGroupsData[groupName] = {
                 groupInfo: {
                     name: groupName,
                     createdBy: groupConfig.createdBy || groupConfig.M?.createdBy?.S || 'Unknown',
-                    rateLimit: groupConfig.rateLimit || groupConfig.M?.rateLimit || null,
+                    rateLimit: rateLimitInfo,
                     directMemberCount: affiliation.summary.directCount,
                     indirectMemberCount: affiliation.summary.indirectCount,
                     totalMemberCount: affiliation.summary.totalCount
@@ -1225,10 +995,11 @@ const internalBillingGroupsCostsHandler = async (event, context, callback) => {
         
         // Calculate percentage of platform costs for each group
         for (const groupData of Object.values(billingGroupsData)) {
-            groupData.costs.percentOfPlatform = platformTotalCost > 0 ? 
+            groupData.costs.percentOfPlatform = platformTotalCost > 0 ?
                 (groupData.costs.total / platformTotalCost) * 100 : 0;
         }
-        
+
+
         const totalDuration = Date.now() - startTime;
         
         const response = {
@@ -1593,32 +1364,41 @@ const internalGetUserCostHistoryHandler = async (event, context, callback) => {
             tableName: historyCostDynamoTableName 
         });
 
-        // Query history table using Scan with filter (since we need to match userDate prefix)
-        const scanParams = {
-            TableName: historyCostDynamoTableName,
-            FilterExpression: 'begins_with(userDate, :emailPrefix)',
-            ExpressionAttributeValues: {
-                ':emailPrefix': `${requestedEmail}#`
-            }
-        };
+        // Scan history strictly for the requested user. We must NEVER mix in the
+        // caller's (`user`) records, otherwise an admin viewing another user's
+        // history would see their own records merged into every result.
+        // Only when the caller is viewing their OWN history are `requestedEmail`
+        // and `user` the same identity.
+        const prefixesToScan = [`${requestedEmail}#`];
+        logger.info("Scanning history with prefixes", { prefixesToScan, requestedEmail, caller: user });
 
         let allHistoryItems = [];
-        let lastEvaluatedKey = null;
 
-        do {
-            if (lastEvaluatedKey) {
-                scanParams.ExclusiveStartKey = lastEvaluatedKey;
-            }
+        for (const prefix of prefixesToScan) {
+            const scanParams = {
+                TableName: historyCostDynamoTableName,
+                FilterExpression: 'begins_with(userDate, :prefix)',
+                ExpressionAttributeValues: {
+                    ':prefix': prefix
+                }
+            };
 
-            const scanCommand = new ScanCommand(scanParams);
-            const result = await dynamoDB.send(scanCommand);
-            
-            if (result.Items && result.Items.length > 0) {
-                allHistoryItems = allHistoryItems.concat(result.Items);
-            }
-            
-            lastEvaluatedKey = result.LastEvaluatedKey;
-        } while (lastEvaluatedKey);
+            let lastEvaluatedKey = null;
+            do {
+                if (lastEvaluatedKey) {
+                    scanParams.ExclusiveStartKey = lastEvaluatedKey;
+                }
+
+                const scanCommand = new ScanCommand(scanParams);
+                const result = await dynamoDB.send(scanCommand);
+
+                if (result.Items && result.Items.length > 0) {
+                    allHistoryItems = allHistoryItems.concat(result.Items);
+                }
+
+                lastEvaluatedKey = result.LastEvaluatedKey;
+            } while (lastEvaluatedKey);
+        }
 
         logger.info("History records retrieved", { count: allHistoryItems.length });
 
@@ -1854,7 +1634,6 @@ const withTracking = (envConfig, operationName, handler) => {
 
 // Export all handlers with environment variable tracking AND usage tracking
 export const handler = withTracking(EnvConfig, 'mtd_cost', mtdHandler);
-export const apiKeyUserCostHandler = withTracking(EnvConfig, 'api_key_user_cost', internalApiKeyUserCostHandler);
 export const listAllUserMtdCostsHandler = withTracking(EnvConfig, 'list_all_user_mtd_costs', internalListAllUserMtdCostsHandler);
 export const billingGroupsCostsHandler = withTracking(EnvConfig, 'billing_groups_costs', internalBillingGroupsCostsHandler);
 export const listUserMtdCostsHandler = withTracking(EnvConfig, 'list_user_mtd_costs', internalListUserMtdCostsHandler);

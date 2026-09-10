@@ -26,8 +26,8 @@ const getBedrockClient = () => {
 export const chatBedrock = async (chatBody, writable) => {
 
     let body = {...chatBody};
-    const options = {...body.options}; 
-    delete body.options; 
+    const options = {...body.options};
+    delete body.options;
     const currentModel = options.model;
 
     const prompt = typeof options.prompt === 'string' ? options.prompt : '';
@@ -37,7 +37,7 @@ export const chatBedrock = async (chatBody, writable) => {
     }
 
     const withoutSystemMessages = [];
-    // options.prompt is a match for the first message in messages 
+    // options.prompt is a match for the first message in messages
     for (const msg of body.messages) {
         if (msg.role === "system") {
                                       // avoid duplicate system prompts
@@ -63,8 +63,8 @@ export const chatBedrock = async (chatBody, writable) => {
         // Initiating call to Bedrock
 
         const maxModelTokens = options.model.outputTokenLimit;
-
-        const maxTokens = body.max_tokens || 2000;
+        const requestedMaxTokens = body.max_tokens || 2000;
+        const maxTokens = requestedMaxTokens < 16 ? 16 : requestedMaxTokens;
 
         // Note: Disable reasoning when tools are present because Bedrock requires thinking blocks
         // in assistant messages when using extended thinking with tools, which complicates the tool loop
@@ -76,8 +76,10 @@ export const chatBedrock = async (chatBody, writable) => {
         // https://docs.claude.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking
         const temperature = isReasoningEnabled ? 1.0 : options.temperature;
 
+        const isOpenAIGpt56 = /^((us|global)\.)?openai\.gpt-5\.6-/i.test(currentModel.id);
         const inferenceConfigs = {
-            "temperature": temperature,
+            // GPT-5.6 rejects temperature entirely; other Bedrock models retain it.
+            ...(isOpenAIGpt56 ? {} : { "temperature": temperature }),
             "maxTokens": maxTokens > maxModelTokens ? maxModelTokens : maxTokens,
         };
 
@@ -88,7 +90,7 @@ export const chatBedrock = async (chatBody, writable) => {
 
         // Add structured output configuration if provided
         if (body.outputConfig) {
-            input.outputConfig = body.outputConfig;
+            input.outputConfig = sanitizeOutputConfig(body.outputConfig);
             logger.info('\u2705 [Bedrock] Added native structured output configuration');
         }
 
@@ -103,28 +105,55 @@ export const chatBedrock = async (chatBody, writable) => {
         }
 
         if (isReasoningEnabled) {
-            const budget_tokens = getBudgetTokens({options}, maxTokens);
-
-            // Final validation: Bedrock strictly requires maxTokens > budget_tokens
-            if (budget_tokens >= maxTokens) {
-                logger.warn(`Extended thinking disabled: budget_tokens (${budget_tokens}) >= maxTokens (${maxTokens}). Bedrock requires maxTokens > budget_tokens.`);
-                // Disable reasoning to prevent ValidationException
+            if (/^((us|global)\.)?openai\.gpt-5\.6-/i.test(currentModel.id)) {
+                // OpenAI GPT-5.6 on Bedrock expects a string effort value.
+                const effort = options.reasoningLevel ?? "low";
+                input.additionalModelRequestFields = {
+                    "reasoning": { "effort": effort }
+                };
+                logger.info(`GPT-5.6 reasoning enabled (effort=${effort}) with maxTokens=${maxTokens}`);
+            } else if (/claude.*opus-4-[6-9]|claude.*opus-4-[1-9][0-9]|claude.*opus-[5-9]|claude.*opus-[1-9][0-9](?!\d)|claude.*sonnet-[5-9]|claude.*sonnet-[1-9][0-9](?!\d)/i.test(currentModel.id)) {
+                // Opus 4.6+, Opus 5+, Sonnet 5+ — effort-based adaptive reasoning.
+                // These models use thinking.type.adaptive + output_config.effort instead of
+                // the older thinking.type.enabled + budget_tokens API.
+                // This mirrors how azure/openai.js and litellmClient.js map
+                // options.reasoningLevel -> effort (low | medium | high).
+                const effort = options.reasoningLevel ?? "low";
+                input.additionalModelRequestFields = {
+                    "reasoning_config": { "type": "adaptive" },
+                    "output_config": { "effort": effort }
+                };
+                logger.info(`Adaptive thinking enabled (Opus 4.6+/5+, effort=${effort}) with temperature=1.0, maxTokens=${maxTokens}`);
             } else {
-                input.additionalModelRequestFields={
+                // All other reasoning-capable Claude models (e.g. Sonnet 4.6) use
+                // "enabled" with budget_tokens. getBudgetTokens encodes the user's
+                // reasoning level (low=1024, medium=2048, high=4096) and already
+                // reserves output tokens, so budget_tokens is always < maxTokens.
+                const budget_tokens = getBudgetTokens({options}, maxTokens);
+                input.additionalModelRequestFields = {
                     "reasoning_config": {
                         "type": "enabled",
                         "budget_tokens": budget_tokens
-                    },
-                }
-                logger.info(`Extended thinking enabled with temperature=1.0 (original: ${options.temperature}), budget_tokens=${budget_tokens}, maxTokens=${maxTokens}`);
+                    }
+                };
+                logger.info(`Extended thinking enabled with temperature=1.0, budget_tokens=${budget_tokens}, maxTokens=${maxTokens}`);
             }
-        } else if (currentModel.supportsReasoning && disableReasoning) {
+        } else if (currentModel.supportsReasoning && disableReasoning && !hasTools) {
+            // GPT-5.6 uses the OpenAI reasoning shape on Bedrock Converse. Its
+            // effort value must be a string, including when reasoning is disabled.
+            // Other reasoning-capable Bedrock models retain the legacy shape.
             logger.info(`Extended thinking disabled by user (disableReasoning=true)`);
-            input.additionalModelRequestFields = {
-                "reasoning_config": {
-                    "type": "disabled"
-                }
-            };
+            if (/^((us|global)\.)?openai\.gpt-5\.6-/i.test(currentModel.id)) {
+                input.additionalModelRequestFields = {
+                    "reasoning": { "effort": "none" }
+                };
+            } else {
+                input.additionalModelRequestFields = {
+                    "reasoning_config": {
+                        "type": "disabled"
+                    }
+                };
+            }
         }
 
         if (currentModel.supportsSystemPrompts) {
@@ -150,7 +179,24 @@ export const chatBedrock = async (chatBody, writable) => {
 
         // Add tool configuration if tools are provided OR if messages contain tool content
         if ((body.tools && body.tools.length > 0) || hasToolRelatedContent) {
-            const tools = body.tools && body.tools.length > 0 ? body.tools : [];
+            let tools = body.tools && body.tools.length > 0 ? body.tools : [];
+
+            // Bedrock rejects toolConfig: { tools: [] } — reconstruct minimal toolSpecs
+            // from toolUse names in history if body.tools wasn't forwarded.
+            if (tools.length === 0 && hasToolRelatedContent) {
+                const toolNames = new Set();
+                sanitizedMessages.forEach(msg => {
+                    if (Array.isArray(msg.content)) {
+                        msg.content.forEach(block => {
+                            if (block.toolUse?.name) toolNames.add(block.toolUse.name);
+                        });
+                    }
+                });
+                if (toolNames.size > 0) {
+                    logger.warn(`body.tools missing but tool-related content found in history — reconstructing minimal toolConfig for: ${[...toolNames].join(', ')}`);
+                    tools = [...toolNames].map(name => ({ function: { name, description: name, parameters: { type: "object", properties: {} } } }));
+                }
+            }
 
             input.toolConfig = {
                 tools: tools.map(tool => {
@@ -168,10 +214,40 @@ export const chatBedrock = async (chatBody, writable) => {
                 })
             };
 
+            // Translate OpenAI-style body.tool_choice into Bedrock's toolConfig.toolChoice
+            // shape. Only Claude 3+ and Mistral Large support toolChoice — others reject it.
+            const supportsToolChoice = /claude|mistral-large/i.test(currentModel.id || "");
+            if (tools.length > 0 && body.tool_choice && supportsToolChoice) {
+                const choice = body.tool_choice;
+                if (choice === "required" || choice === "any") {
+                    input.toolConfig.toolChoice = { any: {} };
+                } else if (choice === "auto") {
+                    input.toolConfig.toolChoice = { auto: {} };
+                } else if (choice && typeof choice === "object") {
+                    // OpenAI shape: { type: "function", function: { name: "..." } }
+                    const toolName = choice.function?.name || choice.name;
+                    if (toolName) {
+                        input.toolConfig.toolChoice = { tool: { name: toolName } };
+                    }
+                } else if (typeof choice === "string" && choice !== "none") {
+                    // A bare tool name string.
+                    input.toolConfig.toolChoice = { tool: { name: choice } };
+                }
+                if (input.toolConfig.toolChoice) {
+                    logger.info(`Set Bedrock toolChoice: ${JSON.stringify(input.toolConfig.toolChoice)}`);
+                }
+            } else if (tools.length > 0 && body.tool_choice && !supportsToolChoice) {
+                logger.warn(`body.tool_choice=${JSON.stringify(body.tool_choice)} requested but model ${currentModel.id} does not support toolChoice — ignoring (model will decide freely whether to call a tool)`);
+            }
+
             if (tools.length > 0) {
                 logger.info(`Added ${tools.length} tools to Bedrock request`);
             } else {
-                logger.info('Added empty toolConfig (required for tool-related content in history)');
+                // No tool definitions available and none could be reconstructed from
+                // history — omit toolConfig entirely rather than sending an empty
+                // tools array, which Bedrock rejects as an invalid request.
+                delete input.toolConfig;
+                logger.warn('Tool-related content found in history but no tools available to build toolConfig — omitting toolConfig to avoid an invalid request');
             }
         }
 
@@ -192,17 +268,14 @@ export const chatBedrock = async (chatBody, writable) => {
         });
 
         const response = await client.send( new ConverseStreamCommand(input) );
-        const { messageStream } = response.stream.options;
-        const decoder = new TextDecoder();
 
-        // Process stream with minimal overhead
-        for await (const chunk of messageStream) {
-            const jsonString = decoder.decode(chunk.body);
+        // Process stream events (SDK v3.1000+ returns parsed event objects directly)
+        for await (const event of response.stream) {
+            const jsonString = JSON.stringify(event);
             // Debug: Log chunks that contain tool-related events
             if (jsonString.includes('toolUse') || jsonString.includes('contentBlockStart') || jsonString.includes('contentBlockStop')) {
                 logger.debug(`🔧 Bedrock tool-related chunk: ${jsonString.substring(0, 500)}`);
             }
-            // Write directly as SSE format without re-parsing (already valid JSON)
             writable.write(`data: ${jsonString}\n\n`);
         }
         writable.end();
@@ -287,6 +360,54 @@ export const chatBedrock = async (chatBody, writable) => {
 }
 
 
+/**
+ * Recursively ensures all JSON Schema objects have additionalProperties: false,
+ * and that any schema values that were JSON-encoded strings are parsed into objects.
+ * Bedrock requires both of these for structured output validation.
+ */
+function enforceAdditionalPropertiesFalse(schema) {
+    if (!schema || typeof schema !== 'object') return schema;
+    if (Array.isArray(schema)) return schema.map(enforceAdditionalPropertiesFalse);
+
+    const result = {};
+    for (const [key, value] of Object.entries(schema)) {
+        result[key] = enforceAdditionalPropertiesFalse(value);
+    }
+
+    if (result.type === 'object') {
+        result.additionalProperties = false;
+    }
+    return result;
+}
+
+function sanitizeOutputConfig(outputConfig) {
+    if (!outputConfig) return outputConfig;
+
+    try {
+        const config = JSON.parse(JSON.stringify(outputConfig)); // deep clone
+
+        const jsonSchema = config?.textFormat?.type?.json_schema?.structure?.jsonSchema;
+        if (jsonSchema) {
+            // schema may have been serialized as a JSON string — parse it first
+            if (typeof jsonSchema.schema === 'string') {
+                try {
+                    jsonSchema.schema = JSON.parse(jsonSchema.schema);
+                } catch (e) {
+                    logger.warn('[Bedrock] outputConfig jsonSchema.schema was a string but failed to parse:', e.message);
+                }
+            }
+            // Recursively inject additionalProperties: false on all object types
+            if (jsonSchema.schema && typeof jsonSchema.schema === 'object') {
+                jsonSchema.schema = enforceAdditionalPropertiesFalse(jsonSchema.schema);
+            }
+        }
+        return config;
+    } catch (e) {
+        logger.warn('[Bedrock] Failed to sanitize outputConfig, using original:', e.message);
+        return outputConfig;
+    }
+}
+
 function combineMessages(oldMessages, failSafeUserMessage) {
     if (!oldMessages || oldMessages.length === 0) return oldMessages;
 
@@ -353,29 +474,46 @@ async function sanitizeMessages(messages, imageSources, model, responseStream) {
 
     // Convert messages to Bedrock format, handling tool calls and tool results
     let updatedMessages = [];
+    // Tracks whether the previously processed message was a tool result, so that
+    // consecutive tool messages (the tool loop emits one per tool call) get MERGED
+    // into a single Bedrock user turn. Bedrock's Converse API requires that ALL
+    // toolResult blocks for the toolUse blocks of the preceding assistant message
+    // live in ONE user message — otherwise it rejects with
+    // "Expected toolResult blocks at messages.N.content for the following Ids: ...".
+    let prevWasTool = false;
     for (const m of messages) {
         if (m.role === 'tool') {
-            // Convert OpenAI tool result to Bedrock toolResult format
+            // Convert OpenAI tool result to a Bedrock toolResult content block.
             // Bedrock expects: { role: 'user', content: [{ toolResult: { toolUseId, content: [{text}] } }] }
+            let toolBlock;
             if (!m.tool_call_id) {
-                // Skip tool messages without tool_call_id - convert to regular user message
-                logger.warn(`Tool message missing tool_call_id, converting to regular user message`);
-                updatedMessages.push({
-                    role: 'user',
-                    content: [{ text: `Tool result: ${m.content || ''}` }]
-                });
+                // Tool message without tool_call_id - fall back to a plain text block
+                logger.warn(`Tool message missing tool_call_id, converting to text block`);
+                toolBlock = { text: `Tool result: ${m.content || ''}` };
             } else {
-                updatedMessages.push({
-                    role: 'user',
-                    content: [{
-                        toolResult: {
-                            toolUseId: m.tool_call_id,
-                            content: [{ text: m.content || '' }]
-                        }
-                    }]
-                });
+                toolBlock = {
+                    toolResult: {
+                        toolUseId: m.tool_call_id,
+                        content: [{ text: m.content || '' }]
+                    }
+                };
             }
-        } else if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+
+            if (prevWasTool && updatedMessages.length > 0) {
+                // Merge into the existing tool-result user message so all
+                // toolResults for one assistant turn stay grouped together.
+                updatedMessages[updatedMessages.length - 1].content.push(toolBlock);
+            } else {
+                updatedMessages.push({ role: 'user', content: [toolBlock] });
+            }
+            prevWasTool = true;
+            continue;
+        }
+
+        // Any non-tool message ends the current tool-result grouping.
+        prevWasTool = false;
+
+        if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
             // Convert OpenAI assistant tool_calls to Bedrock toolUse format
             // Bedrock expects: { role: 'assistant', content: [{ toolUse: { toolUseId, name, input } }, ...] }
             const content = [];
@@ -427,6 +565,12 @@ async function sanitizeMessages(messages, imageSources, model, responseStream) {
 async function includeImageSources(dataSources, messages, responseStream) {
     if (!dataSources || dataSources.length === 0) return messages;
 
+    // Extract filenames for reference labels - prefer ds.name (original filename) over S3 path
+    const imageFilenames = dataSources.map((ds, idx) => {
+        const filename = ds.name || ds.id.split('/').pop() || `image_${idx + 1}`;
+        return filename;
+    });
+
     // Process all images in parallel for faster execution
     const imagePromises = dataSources.map(async (ds) => {
         try {
@@ -436,7 +580,7 @@ async function includeImageSources(dataSources, messages, responseStream) {
                     ds: {...ds, contentKey: extractKey(ds.id)},
                     imageData: {
                         "image": {
-                            "format": ds.type.split('/')[1], 
+                            "format": ds.type.split('/')[1],
                             "source": {
                                 "bytes": Uint8Array.from(atob(encoded_image), char => char.charCodeAt(0))
                             }
@@ -449,12 +593,12 @@ async function includeImageSources(dataSources, messages, responseStream) {
         }
         return null;
     });
-    
+
     const results = await Promise.all(imagePromises);
     const retrievedImages = [];
     let imageMessageContent = [[]];
     let listIdx = 0;
-    
+
     // Process results
     for (const result of results) {
         if (result) {
@@ -476,7 +620,9 @@ async function includeImageSources(dataSources, messages, responseStream) {
 
     const msgLen = messages.length - 1;
     let content = messages[msgLen]['content'];
-    content.push({ "text": additionalImageInstruction});
+
+
+    content.push({ "text": additionalImageInstruction(imageFilenames)});
     content = [...content, ...imageMessageContent[0]];
     messages[msgLen]['content'] = content;
     if (listIdx > 0) {

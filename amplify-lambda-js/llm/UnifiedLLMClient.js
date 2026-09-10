@@ -13,6 +13,7 @@ import {
 import { newStatus, getThinkingMessage } from '../common/status.js';
 import { getAccountId } from '../common/params.js';
 import { recordUsage } from '../common/accounting.js';
+import { logCriticalError } from '../common/criticalLogger.js';
 
 // Import native provider implementations
 import { chat as openaiChat } from '../azure/openai.js';
@@ -193,6 +194,8 @@ function createStreamInterceptor(responseStream, transform, usageTransform, requ
                                 // This is LLM response data - apply provider transformer
                                 const transformed = transform(event, responseStream, capturedContent);
                                 if (transformed) {
+                                    // 💰 Mark that the provider stream actually delivered a response.
+                                    requestState.streamReceivedData = true;
                                     sendDeltaToStream(responseStream, 'answer', transformed);
                                     // Capture content for conversation analysis if requested
                                     if (capturedContent) {
@@ -203,6 +206,8 @@ function createStreamInterceptor(responseStream, transform, usageTransform, requ
                                 // Extract usage from LLM events only
                                 const usage = usageTransform(event);
                                 if (usage) {
+                                    // 💰 Mark that the provider reported token usage at least once.
+                                    requestState.usageMarked = true;
                                     requestState.totalUsage = { ...requestState.totalUsage, ...usage };
                                 }
                             }
@@ -236,6 +241,8 @@ function createStreamInterceptor(responseStream, transform, usageTransform, requ
                             // This is LLM response data - apply provider transformer
                             const transformed = transform(event, responseStream, capturedContent);
                             if (transformed) {
+                                // 💰 Mark that the provider stream actually delivered a response.
+                                requestState.streamReceivedData = true;
                                 sendDeltaToStream(responseStream, 'answer', transformed);
                                 // Capture content for conversation analysis if requested
                                 if (capturedContent) {
@@ -246,6 +253,8 @@ function createStreamInterceptor(responseStream, transform, usageTransform, requ
                             // Extract usage from LLM events only
                             const usage = usageTransform(event);
                             if (usage) {
+                                // 💰 Mark that the provider reported token usage at least once.
+                                requestState.usageMarked = true;
                                 requestState.totalUsage = { ...requestState.totalUsage, ...usage };
                             }
                         }
@@ -278,6 +287,13 @@ function createStreamInterceptor(responseStream, transform, usageTransform, requ
  */
 export async function callUnifiedLLM(params, messages, responseStream = null, options = {}) {
     const requestId = params.requestId || `unified-${uuidv4()}`;
+    // 💰 BILLING-CRITICAL: a single user request can trigger MANY LLM calls (e.g. each
+    // tool-loop iteration calls callUnifiedLLM again with the SAME parent requestId).
+    // `llmCallId` uniquely identifies THIS one LLM call so that usage tracking, billing,
+    // and the billing-leak detector can never be confused across calls. It is grouped
+    // under the parent requestId (`<requestId>::<short-uuid>`) so logs still correlate to
+    // the user request, while remaining unique per call.
+    const llmCallId = `${requestId}::${uuidv4().slice(0, 8)}`;
     const model = params.options?.model || params.model;
 
 
@@ -416,10 +432,20 @@ export async function callUnifiedLLM(params, messages, responseStream = null, op
     // Track request
     const requestState = {
         requestId,
+        llmCallId,
         cancelled: false,
         startTime: Date.now(),
         responseStream,
         statusTimer: null,
+        // 💰 BILLING-CRITICAL stream tracking (provider-agnostic):
+        //   streamReceivedData -> the transform produced at least one piece of output, i.e.
+        //                         the provider stream actually delivered a response.
+        //   usageMarked        -> usageTransform returned non-null usage at least once, i.e.
+        //                         the provider told us the token counts.
+        // If a stream delivered data but usage was never marked, the provider stopped sending
+        // (or we stopped parsing) usage and the request would be silently unbilled.
+        streamReceivedData: false,
+        usageMarked: false,
         totalUsage: {
             prompt_tokens: 0,
             completion_tokens: 0,
@@ -561,7 +587,7 @@ export async function callUnifiedLLM(params, messages, responseStream = null, op
                 responseStream.end();
             }
             logger.debug('Streaming LLM call completed: ', requestId);
-            logger.debug('LLM contenet: ', capturedContent.fullResponse);
+            logger.debug('LLM content: ', capturedContent.fullResponse);
             // Create result object with captured content for conversation analysis
             result = {
                 content: capturedContent.fullResponse,
@@ -575,21 +601,33 @@ export async function callUnifiedLLM(params, messages, responseStream = null, op
             // Create capturedContent object to accumulate tool calls (same as streaming mode)
             const nonStreamCapturedContent = { fullResponse: '', toolCalls: [] };
 
+            // 💰 BILLING-CRITICAL: must use the same cross-chunk SSE buffering as
+            // createStreamInterceptor. Without it, a usage line that arrives split across
+            // two TCP chunks is silently discarded, leaving usageMarked=false and
+            // triggering the UsageNeverMarkedAfterStream billing-leak alert.
+            let sseBuffer = '';
+
             const bufferStream = new Writable({
                 write(chunk, _encoding, callback) {
-                    const text = chunk.toString();
+                    // Accumulate into buffer — same pattern as createStreamInterceptor
+                    sseBuffer += chunk.toString();
 
-                    // Parse SSE format to extract content
-                    const lines = text.split('\n');
+                    // Process only complete lines; keep the last incomplete fragment
+                    const lines = sseBuffer.split('\n');
+                    sseBuffer = lines.pop() || '';
+
                     for (const line of lines) {
-                        if (line.startsWith('data: ') && !line.includes('[DONE]')) {
+                        if (line.trim() && line.startsWith('data: ')) {
+                            const data = line.slice(6).trim();
+                            if (data === '[DONE]') continue;
                             try {
-                                const data = line.slice(6);
                                 const event = JSON.parse(data);
 
                                 // Apply transform to get content - pass capturedContent for tool call accumulation
                                 const transformed = providerConfig.transform(event, null, nonStreamCapturedContent);
                                 if (transformed) {
+                                    // 💰 Mark that the provider stream actually delivered a response.
+                                    requestState.streamReceivedData = true;
                                     if (typeof transformed === 'string') {
                                         fullContent += transformed;
                                         nonStreamCapturedContent.fullResponse += transformed;
@@ -603,10 +641,42 @@ export async function callUnifiedLLM(params, messages, responseStream = null, op
                                 // Extract usage
                                 const usage = providerConfig.usageTransform(event);
                                 if (usage) {
+                                    // 💰 Mark that the provider reported token usage at least once.
+                                    requestState.usageMarked = true;
                                     requestState.totalUsage = { ...requestState.totalUsage, ...usage };
                                 }
                             } catch (err) {
                                 // Not JSON, skip
+                            }
+                        }
+                    }
+                    callback();
+                },
+                final(callback) {
+                    // Flush any remaining buffered data (mirrors createStreamInterceptor.final)
+                    if (sseBuffer.trim() && sseBuffer.startsWith('data: ')) {
+                        const data = sseBuffer.slice(6).trim();
+                        if (data !== '[DONE]') {
+                            try {
+                                const event = JSON.parse(data);
+                                const transformed = providerConfig.transform(event, null, nonStreamCapturedContent);
+                                if (transformed) {
+                                    requestState.streamReceivedData = true;
+                                    if (typeof transformed === 'string') {
+                                        fullContent += transformed;
+                                        nonStreamCapturedContent.fullResponse += transformed;
+                                    } else if (transformed.d) {
+                                        fullContent += transformed.d;
+                                        nonStreamCapturedContent.fullResponse += transformed.d;
+                                    }
+                                }
+                                const usage = providerConfig.usageTransform(event);
+                                if (usage) {
+                                    requestState.usageMarked = true;
+                                    requestState.totalUsage = { ...requestState.totalUsage, ...usage };
+                                }
+                            } catch (err) {
+                                // Incomplete fragment at end of stream, discard
                             }
                         }
                     }
@@ -637,6 +707,8 @@ export async function callUnifiedLLM(params, messages, responseStream = null, op
         const inputWriteCachedTokens = requestState.totalUsage?.inputWriteCachedTokens || 0;
 
         if (promptTokens > 0 || completionTokens > 0 || inputCachedTokens > 0 || inputWriteCachedTokens > 0) {
+            // recordUsage logs its own "📊 [ACCOUNTING] recordUsage invoked" + cost line, so no
+            // duplicate billing log is needed here.
             await recordUsage(
                 params.account,
                 requestId,
@@ -647,6 +719,60 @@ export async function callUnifiedLLM(params, messages, responseStream = null, op
                 inputWriteCachedTokens,
                 { reasoning_tokens: requestState.totalUsage.reasoning_tokens || 0 }
             );
+        } else if (requestState.streamReceivedData && !requestState.usageMarked) {
+            // 💰 BILLING LEAK DETECTOR (provider-agnostic):
+            // The provider stream DELIVERED a response (streamReceivedData === true) but we
+            // NEVER captured usage from it (usageMarked === false). That means the model ran,
+            // consumed compute, produced output — and this request is about to go UNBILLED.
+            // This is the exact gpt-5/o-model failure mode, but the check is generic so it will
+            // catch the same regression for ANY provider (OpenAI/Azure/Bedrock/Gemini) in future.
+            logger.error("🚨 [USAGE-CAPTURE] BILLING LEAK: stream delivered a response but NO usage was ever marked — this LLM call will NOT be billed.", {
+                requestId,
+                llmCallId,
+                modelId: model?.id,
+                provider: model?.provider,
+                user: params.account?.user,
+                accountId: params.account?.accountId,
+                apiKeyId: params.account?.apiKeyId,
+                streamReceivedData: requestState.streamReceivedData,
+                usageMarked: requestState.usageMarked,
+                rawTotalUsage: requestState.totalUsage
+            });
+
+            // Page on-call via the critical-error pipeline. A streamed answer that bills $0 is a
+            // silent revenue leak and must be investigated, not buried in info logs.
+            // We report llmCallId so the EXACT leaking call is identifiable even when several
+            // LLM calls share the same parent requestId (e.g. tool-loop iterations).
+            await logCriticalError({
+                functionName: 'UnifiedLLMClient.callUnifiedLLM',
+                errorType: 'UsageNeverMarkedAfterStream',
+                errorMessage: `Model ${model?.id || 'unknown'} (${model?.provider || 'unknown'}) streamed a response but usage was never marked — billing skipped. llmCallId=${llmCallId}`,
+                currentUser: params.account?.user || 'unknown',
+                // 💰 Highest severity possible. A streamed answer that bills $0 is a silent
+                // revenue leak (the exact gpt-5/o-model failure mode) and must page immediately.
+                severity: 'CRITICAL',
+                stackTrace: '',
+                context: {
+                    requestId,
+                    llmCallId,
+                    modelId: model?.id || 'unknown',
+                    provider: model?.provider || 'unknown',
+                    accountId: params.account?.accountId || 'unknown',
+                    apiKeyId: params.account?.apiKeyId || 'unknown',
+                    streamReceivedData: requestState.streamReceivedData,
+                    usageMarked: requestState.usageMarked,
+                    rawTotalUsage: requestState.totalUsage
+                }
+            }).catch(err => logger.error('Failed to log critical billing-leak error:', err));
+        } else {
+            // No data delivered (empty/aborted/errored response) — genuinely nothing to bill.
+            // Not an anomaly, so keep it quiet to avoid false alarms.
+            logger.debug("[USAGE-CAPTURE] No usage and no streamed data — nothing to bill (not an anomaly).", {
+                requestId,
+                llmCallId,
+                modelId: model?.id,
+                provider: model?.provider
+            });
         }
 
         // Queue conversation analysis - pass options to ensure conversationId is included
@@ -730,6 +856,64 @@ export async function callUnifiedLLM(params, messages, responseStream = null, op
 }
 
 /**
+ * Recursively adds additionalProperties: false to all object-type nodes in a JSON schema.
+ * Required by Bedrock Claude 4+ models when using outputConfig structured output.
+ */
+function addAdditionalPropertiesFalse(schema) {
+    if (!schema || typeof schema !== 'object') return schema;
+    const result = { ...schema };
+    if (result.type === 'object') {
+        result.additionalProperties = false;
+        if (result.properties) {
+            const updatedProps = {};
+            for (const [key, val] of Object.entries(result.properties)) {
+                updatedProps[key] = addAdditionalPropertiesFalse(val);
+            }
+            result.properties = updatedProps;
+        }
+    }
+    if (result.items) {
+        result.items = addAdditionalPropertiesFalse(result.items);
+    }
+    return result;
+}
+
+/**
+ * Deterministically repair the common STRUCTURAL JSON defects that Azure gpt-4.1-mini
+ * occasionally emits even under a strict json_schema. These are punctuation defects, not
+ * semantic ones, so they can be fixed without changing meaning:
+ *   - double / empty commas:  [0,1,,3]  (model dropped an integer)  -> [0,1,3]
+ *   - trailing commas:        [0,1,]                                -> [0,1]
+ *   - leading commas:         [,0,1]                                -> [0,1]
+ * Only meaningful to call after a real JSON.parse failure.
+ */
+function repairMalformedJson(text) {
+    return text
+        .replace(/,(\s*,)+/g, ',')       // collapse ANY run of commas: [0,1,,,5] -> [0,1,5]
+        .replace(/,\s*([\]}])/g, '$1')   // strip trailing commas:      [0,1,]    -> [0,1]
+        .replace(/([\[{])\s*,/g, '$1');  // strip leading commas:       [,0,1]    -> [0,1]
+}
+
+/**
+ * Parse JSON, attempting a single deterministic repair pass if the first parse fails.
+ * This lets us salvage Azure's malformed structured output WITHOUT paying for a full LLM
+ * retry. It never corrupts valid JSON because the repair only runs after a parse failure,
+ * and if the repair doesn't change the string we rethrow the original error.
+ *
+ * @returns {{parsed: any, repaired: boolean}}
+ * @throws  the original parse error if neither the raw nor repaired text is valid JSON
+ */
+function parseJsonWithRepair(text) {
+    try {
+        return { parsed: JSON.parse(text), repaired: false };
+    } catch (firstErr) {
+        const repaired = repairMalformedJson(text);
+        if (repaired === text) throw firstErr; // nothing to fix — genuinely broken
+        return { parsed: JSON.parse(repaired), repaired: true };
+    }
+}
+
+/**
  * Prompt for structured data using function calling or JSON schema
  */
 export async function promptUnifiedLLMForData(
@@ -764,22 +948,47 @@ RULES:
         { role: 'system', content: jsonPrompt }
     ];
 
+    // Override the conversational system prompt so the model doesn't get
+    // "respond in markdown" instructions fighting against our JSON requirement
+    const dataParams = {
+        ...params,
+        options: {
+            ...(params.options || {}),
+            prompt: 'You are a data extraction assistant. Respond only with valid JSON.'
+        }
+    };
+
     // Prepare structured output options based on provider (additional enforcement if supported)
     const provider = model?.provider;
     let structuredOutputOptions = {};
 
     if (provider === 'Bedrock') {
-        structuredOutputOptions.outputConfig = {
-            textFormat: {
-                type: "json_schema",
-                structure: {
-                    jsonSchema: {
-                        schema: JSON.stringify(outputFormat)
+        // Only Claude models support outputConfig on Bedrock.
+        // Nova, Titan, Llama, Mistral, and other non-Claude models will error if outputConfig is sent.
+        // Claude 4+ models also require additionalProperties: false on all object schemas.
+        const modelId = (model?.id || '').toLowerCase();
+        const isClaudeModel = modelId.includes('claude');
+        if (isClaudeModel) {
+            const schemaWithAdditionalProps = addAdditionalPropertiesFalse(outputFormat);
+            structuredOutputOptions.outputConfig = {
+                textFormat: {
+                    type: "json_schema",
+                    structure: {
+                        jsonSchema: {
+                            schema: JSON.stringify(schemaWithAdditionalProps)
+                        }
                     }
                 }
+<<<<<<< HEAD
             }
         };
     } else if (provider === 'Azure' || provider === 'OpenAI' || provider === 'Gemini' || provider === 'Local' || provider === 'OnPrem' || provider === 'lakeshore') {
+=======
+            };
+        }
+        // else: fall through to JSON-in-prompt only (no outputConfig)
+    } else if (provider === 'Azure' || provider === 'OpenAI' || provider === 'Gemini') {
+>>>>>>> upstream/main
         structuredOutputOptions.response_format = {
             type: "json_schema",
             json_schema: {
@@ -798,7 +1007,7 @@ RULES:
     if (Object.keys(structuredOutputOptions).length > 0) {
         try {
             usedStructuredOutput = true;
-            result = await callUnifiedLLM(params, finalMessages, null, structuredOutputOptions);
+            result = await callUnifiedLLM(dataParams, finalMessages, null, structuredOutputOptions);
 
             // Check if response is actually JSON (some models ignore structured output config)
             const content = result.content || '';
@@ -806,37 +1015,77 @@ RULES:
             const testContent = jsonMatch ? jsonMatch[0] : content;
 
             try {
-                JSON.parse(testContent);
-                // Valid JSON, continue
+                // Accept valid JSON OR JSON we can deterministically repair (Azure gpt-4.1-mini
+                // sometimes emits a double/trailing comma). Repairable output is NOT a reason to
+                // burn a second LLM call — only genuinely non-JSON output triggers the retry.
+                const { repaired } = parseJsonWithRepair(testContent);
+                if (repaired) {
+                    logger.warn(`Structured output JSON was malformed but repairable for ${provider}; keeping result and skipping retry.`);
+                }
             } catch (jsonTestError) {
-                // Structured output returned non-JSON, retry without flag
+                // Structured output returned non-JSON (not just a punctuation defect), retry without flag
                 logger.warn(`Structured output returned non-JSON for ${provider}, retrying without structured output flag. Preview: ${content.substring(0, 100)}...`);
                 usedStructuredOutput = false;
                 retried = true;
-                result = await callUnifiedLLM(params, finalMessages, null, {});
+                result = await callUnifiedLLM(dataParams, finalMessages, null, {});
             }
         } catch (structuredError) {
             logger.warn(`Structured output call failed for ${provider}, retrying without structured output flag:`, structuredError.message);
             usedStructuredOutput = false;
             retried = true;
             // Fallback: retry without structured output
-            result = await callUnifiedLLM(params, finalMessages, null, {});
+            result = await callUnifiedLLM(dataParams, finalMessages, null, {});
         }
     } else {
         // No structured output support, call directly
-        result = await callUnifiedLLM(params, finalMessages, null, {});
+        result = await callUnifiedLLM(dataParams, finalMessages, null, {});
     }
 
-    // Parse JSON response
+    // Parse JSON response (with the same deterministic repair pass used during validation,
+    // so a malformed-but-recoverable structured output is salvaged rather than thrown away).
+    const content = result.content || '';
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    const candidate = jsonMatch ? jsonMatch[0] : content;
+
     try {
-        const content = result.content || '';
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-            return JSON.parse(jsonMatch[0]);
+        const { parsed, repaired } = parseJsonWithRepair(candidate);
+        if (repaired) {
+            logger.warn(`Salvaged malformed structured-output JSON after deterministic repair. Original preview: ${candidate.substring(0, 120)}`);
         }
-        return JSON.parse(content);
+        return parsed;
     } catch (parseError) {
-        logger.error('Failed to parse JSON response:', parseError);
+        // Last-resort: the response has irreparable structural corruption (e.g. Azure gpt-4.1-mini
+        // merging adjacent integers like "46,4750" instead of "46,47,50"). Standard JSON.parse
+        // and our punctuation-repair pass both fail. However, we can still extract a best-effort
+        // result by pulling the individual integers/strings out of the raw text with a regex.
+        // Out-of-range or oversized merged numbers are safely discarded by the caller's own
+        // bounds-checking (e.g. datasources.js filters idx < context.content.length).
+        try {
+            // Try to find all integer values referenced in the response
+            const integerMatches = candidate.match(/\b\d+\b/g);
+            if (integerMatches && integerMatches.length > 0) {
+                // Reconstruct a best-effort object. We can only do this reliably when the
+                // schema is a simple wrapper around an array of integers (the relevantIndexes
+                // pattern). For anything more complex, fall through to the original throw.
+                const ints = [...new Set(integerMatches.map(Number))].sort((a, b) => a - b);
+
+                // Try to identify what key in the outputFormat this array belongs to
+                const arrayKey = outputFormat?.properties
+                    ? Object.keys(outputFormat.properties).find(k =>
+                        outputFormat.properties[k]?.type === 'array' &&
+                        outputFormat.properties[k]?.items?.type === 'integer')
+                    : null;
+
+                if (arrayKey) {
+                    logger.warn(`Regex fallback: extracted ${ints.length} integers for key "${arrayKey}" from irreparably malformed JSON. Preview: ${candidate.substring(0, 120)}`);
+                    return { [arrayKey]: ints };
+                }
+            }
+        } catch (regexError) {
+            // regex fallback itself failed, fall through to original error
+        }
+
+        logger.error('Failed to parse JSON response (repair also failed):', parseError);
         logger.error('Raw response content:', result.content);
         logger.error('Used structured output:', usedStructuredOutput);
         logger.error('Retried without structured output:', retried);

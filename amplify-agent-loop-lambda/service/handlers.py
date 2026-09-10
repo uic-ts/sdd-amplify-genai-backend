@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import traceback
 import copy
 
@@ -15,8 +16,6 @@ import agent.tools.prompt_tools
 import agent.tools.shell
 import agent.tools.structured_editing
 import agent.tools.markdown_converter
-import agent.tools.database_tool
-
 from agent.agents import actions_agent, workflow_agent
 from agent.capabilities.workflow_model import Workflow
 from agent.components.agent_registry import AgentRegistry
@@ -27,6 +26,7 @@ from agent.core import Action, UnknownActionError
 from agent.prompt import create_llm
 from agent.tools.ops import ops_to_tools, get_default_ops_as_tools
 from pycommon.api.ops import api_tool
+from pycommon.encoders import SmartDecimalEncoder
 from pycommon.decorators import required_env_vars
 from pycommon.dal.providers.aws.resource_perms import (
     DynamoDBOperation, S3Operation, SecretsManagerOperation
@@ -79,7 +79,7 @@ def save_conversation_state(
             s3.put_object(
                 Bucket=consolidation_bucket,
                 Key=s3_key,
-                Body=json.dumps(conversation_results, indent=2),
+                Body=json.dumps(conversation_results, indent=2, cls=SmartDecimalEncoder),
                 ContentType="application/json",
             )
         except ClientError as e:
@@ -603,7 +603,28 @@ def handle_event(
                             f"Invalid Workflow. Action not found: Step {i+1}, Action: {step.tool}"
                         )
 
-        if additional_goals and not workflow:
+        # Determine whether assistant instructions are present
+        # (additional_goals contains the assistant's Instructions: goal when an assistant is selected)
+        has_assistant_instructions = any(
+            getattr(g, "name", "") == "Instructions:" for g in additional_goals
+        )
+
+        if workflow and has_assistant_instructions:
+            # Workflow is PRIMARY — use workflow_agent to enforce step-by-step execution.
+            # Assistant instructions are passed as additional_goals so the assistant's
+            # personality/context is preserved alongside the workflow steps.
+            logger.info(
+                "Assistant + Workflow: building workflow_agent with workflow as primary, "
+                "assistant instructions as additional context"
+            )
+            agent = workflow_agent.build_clean(
+                environment=environment,
+                action_registry=action_registry,
+                generate_response=llm,
+                workflow=workflow,
+                additional_goals=additional_goals,
+            )
+        elif additional_goals and not workflow:
             logger.info("Building action agent with additional goals: %s", additional_goals)
             agent = actions_agent.build_clean(
                 environment=environment,
@@ -620,6 +641,7 @@ def handle_event(
                 additional_goals=additional_goals,
             )
         else:
+            # Workflow only — no assistant instructions — workflow_agent drives execution
             logger.info("Building workflow agent with workflow: %s", workflow)
             agent = workflow_agent.build_clean(
                 environment=environment,
@@ -763,7 +785,23 @@ def handle_event(
         return {"handled": False, "error": "Error handling event"}
 
 
+_SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+
+
+def _validate_session_id(session_id):
+    """Reject session IDs that contain path traversal or injection characters."""
+    if not isinstance(session_id, str):
+        raise ValueError("sessionId must be a string")
+    if len(session_id) > 256:
+        raise ValueError("sessionId exceeds maximum length")
+    if not _SESSION_ID_RE.match(session_id):
+        raise ValueError(
+            "sessionId contains invalid characters (only letters, digits, dash, underscore allowed)"
+        )
+
+
 def get_working_directory(session_id):
+    _validate_session_id(session_id)
     work_directory = os.environ.get("WORK_DIRECTORY", None)
     if not work_directory:
         work_directory = f"/tmp/{session_id}"

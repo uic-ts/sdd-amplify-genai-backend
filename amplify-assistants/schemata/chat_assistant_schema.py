@@ -4,7 +4,6 @@ chat_assistant_schema = {
         "assistantId": {"type": "string"},
         "accountId": {"type": "string"},
         "requestId": {"type": "string"},
-        "threadId": {"type": ["string", "null"]},
         "messages": {
             "anyOf": [
                 {  # Messages through amplify
@@ -21,7 +20,7 @@ chat_assistant_schema = {
                             "codeInterpreterMessageData": {
                                 "type": "object",
                                 "properties": {
-                                    "threadId": {"type": "string"},
+                                    "codeInterpreterRecordId": {"type": "string"},
                                     "role": {"type": "string"},
                                     "textContent": {"type": "string"},
                                     "content": {
@@ -31,11 +30,10 @@ chat_assistant_schema = {
                                             "properties": {
                                                 "type": {
                                                     "enum": [
-                                                        "image_file",
-                                                        "file",
                                                         "application/pdf",
                                                         "text/csv",
                                                         "image/png",
+                                                        "binary/octet-stream",
                                                     ]
                                                 },
                                                 "values": {

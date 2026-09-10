@@ -11,7 +11,7 @@ import {PutObjectCommand, S3Client} from "@aws-sdk/client-s3";
 import {addAllReferences, DATASOURCE_TYPE, getReferences, getReferencesByType} from "./instructions/references.js";
 import {opsLanguages} from "./opsLanguages.js";
 import {newStatus} from "../common/status.js";
-import {sendStateEventToStream, sendStatusEventToStream, forceFlush} from "../common/streams.js";
+import {sendStateEventToStream, sendStatusEventToStream, forceFlush, sendErrorMessage} from "../common/streams.js";
 import {invokeAgent, constructTools, getTools} from "./agent.js";
 import {getLogger} from "../common/logging.js";
 // Skills integration
@@ -361,11 +361,10 @@ export const fillInAssistant = (assistant, assistantBase, layeredAstId = null) =
                     });
                 }
             }
-
+            const user = params.account?.user;
             // 🎯 SKILLS INTEGRATION: Inject skills into assistant context
             let activeSkills = [];
             try {
-                const user = params.account?.user;
                 const skillsEnabled = process.env.SKILLS_DYNAMODB_TABLE; // Feature flag via env var existence
 
                 if (skillsEnabled && user) {
@@ -578,11 +577,20 @@ export const fillInAssistant = (assistant, assistantBase, layeredAstId = null) =
                         }
                     );
 
-                    let workflowTemplateId = assistant.data?.workflowTemplateId ? 
+                    let workflowTemplateId = assistant.data?.workflowTemplateId ?
                                             {workflow: {templateId: assistant.data.workflowTemplateId}} : {};
 
                     if (!workflowTemplateId.workflow && assistant.data.baseWorkflowTemplateId) { // backup
                         workflowTemplateId = {workflow: {templateId: assistant.data.baseWorkflowTemplateId}};
+                    }
+
+                    // If no workflow on the assistant itself, check if user attached one from the chat input
+                    if (!workflowTemplateId.workflow) {
+                        const lastMsgWorkflowId = body.messages.slice(-1)[0]?.data?.workflowTemplateId;
+                        if (lastMsgWorkflowId) {
+                            logger.info("Workflow templateId found in message data:", lastMsgWorkflowId);
+                            workflowTemplateId = {workflow: {templateId: lastMsgWorkflowId}};
+                        }
                     }
 
                     // const segment = AWSXRay.getSegment();
@@ -663,14 +671,32 @@ export const fillInAssistant = (assistant, assistantBase, layeredAstId = null) =
                         logger.info(`Passing ${activeSkills.length} skills to agent loop: ${activeSkills.map(s => s.name).join(', ')}`);
                     }
 
-                    invokeAgent(
+                    // Fire without awaiting — the agent lambda stays open while it works
+                    // and the frontend polls for results. We race against a short window
+                    // to catch fast failures (WAF blocks, auth errors) that come back in
+                    // well under a second. If nothing comes back in time, it's processing.
+                    const invokePromise = invokeAgent(
                         params.account.accessToken,
                         sessionId,
                         params.options.requestId,
                         body.messages,
                         agentMetadata
+                    ).then(result => ({ type: 'result', value: result }))
+                     .catch(err  => ({ type: 'error',  err }));
+
+                    const timeoutPromise = new Promise(resolve =>
+                        setTimeout(() => resolve({ type: 'timeout' }), 1000)
                     );
 
+                    const raceResult = await Promise.race([invokePromise, timeoutPromise]);
+
+                    if (raceResult.type === 'error' || (raceResult.type === 'result' && !raceResult.value)) {
+                        logger.error(`Agent invocation failed for sessionId: ${sessionId}.`, raceResult.err || '');
+                        sendErrorMessage(responseStream, 503);
+                        return;
+                    }
+
+                    // Timed out (still running) or got a fast success — either way, proceed
                     sendStatusEventToStream(responseStream, statusInfo);
                     forceFlush(responseStream);
 
@@ -780,7 +806,7 @@ export const fillInAssistant = (assistant, assistantBase, layeredAstId = null) =
                             content: "Pay close attention to any provided information. Unless told otherwise, " +
                                 "cite the information you are provided with quotations supporting your analysis " +
                                 "the [Page X, Slide Y, Paragraph Q, etc.] of the quotation.",
-                            data: {dataSources: extractAssistantDatasources(assistant, assistant._layeredAstId || null)}
+                            data: {dataSources: extractAssistantDatasources(assistant, assistant._layeredAstId || null, user)}
                         },
                         {
                             role: 'system',
@@ -918,7 +944,7 @@ function extractDriveDatasources(data) {
         .filter(datasource => datasource && datasource.id);
 }
 
-function extractAssistantDatasources(assistant, layeredAstId = null) {
+function extractAssistantDatasources(assistant, layeredAstId = null, currentUser = null) {
     if (!assistant) return [];
 
     const groupId = assistant.data?.groupId;
@@ -936,12 +962,20 @@ function extractAssistantDatasources(assistant, layeredAstId = null) {
         assistant.dataSources.forEach(ds => {
             if (!ds.groupId) ds.groupId = groupId;
         });
-    // If this assistant was reached via a Layered Assistant, tag datasources with
-    // both the LA publicId and the leaf assistantId. Dual retrieval will:
-    //   1. Check if the user has access to the *layered* assistant path
-    //   2. Check if the *leaf* assistant has access to the datasources
-    // This covers personal-leaf-without-astPath (Bug #7) and wrong-path-checked (Bug #6).
-    } else if (layeredAstId) {
+    // If this assistant was reached via a Layered Assistant, how we tag the
+    // datasources depends on whether the CURRENT USER owns the leaf assistant:
+    //
+    //   • You ARE the leaf owner → the leaf's datasources are your own files.
+    //     Do NOT take the special layered path — fall through and treat them
+    //     exactly like a normal assistant's datasources (individual / standalone
+    //     path checks already answer "does current_user have access?").
+    //
+    //   • You are NOT the leaf owner (reached via a shared standalone path or a
+    //     group) → dual retrieval will (1) confirm you can access the *layered*
+    //     assistant path (layeredAstId) and (2) verify the leaf assistant
+    //     actually owns the datasources by looking them up in the assistant
+    //     record (keyed by astId) — no owner email needs to be passed.
+    } else if (layeredAstId && currentUser && assistant.user && currentUser !== assistant.user) {
         assistant.dataSources.forEach(ds => {
             ds.ast = { layeredAstId, astId: assistant.assistantId };
         });

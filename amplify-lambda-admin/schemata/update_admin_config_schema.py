@@ -1,4 +1,4 @@
-from .rate_limit_schema import rate_limit_schema, rate_limits_schema
+from .rate_limit_schema import rate_limits_schema, admin_rate_limit_config_schema
 
 update_admin_config_schema = {
     "type": "object",
@@ -470,7 +470,7 @@ update_admin_config_schema = {
                                 "type": "string",
                                 "const": "rateLimit"
                             },
-                            "data": rate_limits_schema
+                            "data": admin_rate_limit_config_schema
                         },
                         "required": ["type", "data"],
                         "additionalProperties": False
@@ -551,6 +551,36 @@ update_admin_config_schema = {
                         "additionalProperties": False
                     },
                     {
+                        # Configuration for 'defaultTimezone'
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "const": "defaultTimezone"
+                            },
+                            "data": {
+                                "type": "string",
+                            },
+                        },
+                        "required": ["type", "data"],
+                        "additionalProperties": False
+                    },
+                    {
+                        # Configuration for 'defaultSmartMessages'
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "const": "defaultSmartMessages"
+                            },
+                            "data": {
+                                "type": "boolean",
+                            },
+                        },
+                        "required": ["type", "data"],
+                        "additionalProperties": False
+                    },
+                    {
                         # Configuration for 'webSearchConfig'
                         "type": "object",
                         "properties": {
@@ -565,12 +595,19 @@ update_admin_config_schema = {
                                         "properties": {
                                             "provider": {
                                                 "type": "string",
-                                                "enum": ["brave_search", "tavily", "serper", "serpapi"]
+                                                "enum": ["brave_search", "tavily", "serper", "serpapi", "bedrock_agentcore"]
                                             },
                                             "isEnabled": {"type": "boolean"},
                                             "allowUserWebSearchKeys": {"type": "boolean"},
                                             "webSearchUserMessage": {"type": "string"},
-                                            "api_key": {"type": "string"}
+                                            "api_key": {"type": "string"},
+                                            "bedrockAgentCoreGatewayUrl": {"type": "string"},
+                                            "bedrockAgentCoreRegion": {"type": "string"},
+                                            "bedrockAgentCoreTokenUrl": {"type": "string"},
+                                            "bedrockAgentCoreClientId": {"type": "string"},
+                                            "bedrockAgentCoreScope": {"type": "string"},
+                                            "bedrockAgentCoreToolName": {"type": "string"},
+                                            "bedrockAgentCoreAuthMode": {"type": "string"}
                                         },
                                         "required": [],
                                         "additionalProperties": False
